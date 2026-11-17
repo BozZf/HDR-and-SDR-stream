@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr char kColorShader[] = R"SHADER(@COLOR_SHADER@)SHADER";

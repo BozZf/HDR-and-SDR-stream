@@ -46,7 +46,7 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\Release\HdrBridge.exe
 ```
 
-O workflow [Windows](../../actions/workflows/windows.yml) compila, executa testes
+O workflow [Windows](https://github.com/BozZf/HDR-and-SDR-stream/actions/workflows/windows.yml) compila, executa testes
 e disponibiliza o executável como artefato quando a execução termina com sucesso.
 Ele usa WARP para testar a matemática do shader; não testa um monitor HDR real.
 O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio.

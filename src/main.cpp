@@ -279,6 +279,7 @@ struct App {
     }
     void Tick() {
         if (!running || IsIconic(output)) return;
+        ID3D11ShaderResourceView* none = nullptr;
         auto frame = pool.TryGetNextFrame();
         if (frame) {
             // Keep only the freshest of the two available frames.
@@ -296,7 +297,6 @@ struct App {
             D3D11_TEXTURE2D_DESC sourceDesc{}; texture->GetDesc(&sourceDesc);
             UINT width = std::min(static_cast<UINT>(size.Width), sourceDesc.Width);
             UINT height = std::min(static_cast<UINT>(size.Height), sourceDesc.Height);
-            ID3D11ShaderResourceView* none = nullptr;
             context->PSSetShaderResources(0, 1, &none);
             if (!copied || width != imageWidth || height != imageHeight) {
                 image = nullptr; copied = nullptr;

@@ -15,8 +15,9 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 | Fechar origem | Captura para e saída some, sem continuar exibindo o último frame. |
 | Alterar seleção sem Iniciar | Captura anterior continua; status conserva a origem ativa. |
 | Esconder controles | Transmissão continua; ícone da bandeja reabre controles. |
-| Fechar saída / Parar | Captura termina. |
-| Minimizar saída | Render pausa; restaurar retoma. Evitar minimizar durante transmissão. |
+| Fechar saída | Apenas a saída grande fecha; prévia e captura continuam. |
+| Parar | Sessão termina; prévia, quadro interno e saída são apagados. |
+| Minimizar saída | Só a apresentação dessa saída pausa; a prévia interna continua se visível. Evitar minimizar durante transmissão. |
 | Monitor inteiro | Saída em segundo monitor; origem não contém a saída. |
 | Alternar HDR / reconectar tela | Registrar eventuais falhas; reiniciar app em perda de dispositivo. |
 | NVIDIA / AMD / Intel / GPUs distintas | Testar individualmente; sem alegar compatibilidade sem execução. |
@@ -24,6 +25,14 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 
 ## Novos controles
 
+- Iniciar captura: só a prévia de 320×180 abre dentro da janela principal; nenhuma
+  saída grande é exibida automaticamente.
+- Abrir/fechar saída para Discord: mesma imagem processada, sem mudança de origem
+  ou cor; fechar pelo X não para a prévia.
+- Executar `PreviewPipelineTests`: miniaturas 320×180/480×270 não alteram textura
+  720p/1080p, SDR não recebe uma segunda conversão e HDR preserva valores.
+- Ocultar controles durante compartilhamento: saída continua atualizando.
+- Ambos os visores ocultos/minimizados: processamento pausa, retoma ao restaurar.
 - Trocar 720p/1080p durante captura: conferir back buffer e área cliente de saída
   em 1280×720/1920×1080, inclusive com DPI diferente entre monitores.
 - Trocar 30/60 fps: medir apresentações e distinguir o alvo da taxa real da origem.

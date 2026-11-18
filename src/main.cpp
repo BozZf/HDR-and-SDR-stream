@@ -20,6 +20,7 @@
 #include <vector>
 #include <chrono>
 #include "stream_settings.h"
+#include "video_frame.h"
 #include "shader_source.h"
 
 using namespace winrt;
@@ -29,7 +30,7 @@ using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
-              kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111;
+              kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112;
 
 com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     com_ptr<ID3DBlob> blob, errors;
@@ -43,7 +44,7 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
 }
 
 struct App {
-    HWND controls{}, output{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
+    HWND controls{}, output{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
     bool hdr = false, running = false;
     struct Source { HMONITOR monitor{}; HWND window{}; DWORD process{}; std::wstring label; };
@@ -127,15 +128,17 @@ struct App {
     com_ptr<ID3D11Device> device;
     com_ptr<ID3D11DeviceContext> context;
     com_ptr<IDXGIFactory2> factory;
-    com_ptr<IDXGISwapChain1> swap;
-    com_ptr<ID3D11RenderTargetView> target;
+    com_ptr<IDXGISwapChain1> swap, previewSwap;
+    com_ptr<ID3D11RenderTargetView> target, previewTarget;
+    bridge::VideoFrame programFrame;
     com_ptr<ID3D11VertexShader> vs;
-    com_ptr<ID3D11PixelShader> ps;
+    com_ptr<ID3D11PixelShader> ps, displayShader;
     com_ptr<ID3D11SamplerState> sampler;
     com_ptr<ID3D11Buffer> constants;
     com_ptr<ID3D11Texture2D> copied;
     com_ptr<ID3D11ShaderResourceView> image;
     UINT imageWidth = 0, imageHeight = 0, outputWidth = 0, outputHeight = 0;
+    UINT previewWidth = 0, previewHeight = 0;
     IDirect3DDevice winDevice{nullptr};
     GraphicsCaptureItem item{nullptr};
     Direct3D11CaptureFramePool pool{nullptr};
@@ -164,6 +167,8 @@ struct App {
         auto vertex = Compile("VS", "vs_5_0"), pixel = Compile("PS", "ps_5_0");
         check_hresult(device->CreateVertexShader(vertex->GetBufferPointer(), vertex->GetBufferSize(), nullptr, vs.put()));
         check_hresult(device->CreatePixelShader(pixel->GetBufferPointer(), pixel->GetBufferSize(), nullptr, ps.put()));
+        auto display=Compile("DisplayPS","ps_5_0");
+        check_hresult(device->CreatePixelShader(display->GetBufferPointer(),display->GetBufferSize(),nullptr,displayShader.put()));
         D3D11_SAMPLER_DESC sample{};
         sample.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sample.AddressU = sample.AddressV = sample.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
@@ -177,10 +182,14 @@ struct App {
     void ReleaseSwap() {
         context->OMSetRenderTargets(0, nullptr, nullptr);
         target = nullptr; swap = nullptr;
+        previewTarget = nullptr; previewSwap = nullptr;
+        programFrame.Reset();
         context->ClearState(); context->Flush();
-        outputWidth = outputHeight = 0;
+        outputWidth = outputHeight = previewWidth = previewHeight = 0;
     }
-    void EnsureTarget(UINT width, UINT height) {
+    void EnsureSurface(HWND destination, UINT width, UINT height,
+        com_ptr<IDXGISwapChain1>& swap, com_ptr<ID3D11RenderTargetView>& target,
+        UINT& outputWidth, UINT& outputHeight) {
         if (swap && width == outputWidth && height == outputHeight) return;
         context->OMSetRenderTargets(0, nullptr, nullptr);
         target = nullptr;
@@ -191,8 +200,8 @@ struct App {
             desc.SampleDesc.Count = 1; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
             desc.BufferCount = 2; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             desc.Scaling = DXGI_SCALING_STRETCH; desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-            check_hresult(factory->CreateSwapChainForHwnd(device.get(), output, &desc, nullptr, nullptr, swap.put()));
-            check_hresult(factory->MakeWindowAssociation(output, DXGI_MWA_NO_ALT_ENTER));
+            check_hresult(factory->CreateSwapChainForHwnd(device.get(), destination, &desc, nullptr, nullptr, swap.put()));
+            check_hresult(factory->MakeWindowAssociation(destination, DXGI_MWA_NO_ALT_ENTER));
             auto swap3 = swap.as<IDXGISwapChain3>();
             auto space = hdr ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
             UINT support = 0;
@@ -218,12 +227,15 @@ struct App {
         if (context) context->PSSetShaderResources(0, 1, &none);
         image = nullptr; copied = nullptr;
         imageWidth = imageHeight = 0;
-        if (target) {
-            float black[4] = {0,0,0,1};
-            context->ClearRenderTargetView(target.get(), black);
-            swap->Present(0,0);
+        if (context) {
+            programFrame.Clear(context.get());
+            float black[4]={0,0,0,1};
+            if (target) { context->ClearRenderTargetView(target.get(),black); swap->Present(0,0); }
+            if (previewTarget) { context->ClearRenderTargetView(previewTarget.get(),black); previewSwap->Present(0,0); }
         }
         ShowWindow(output, SW_HIDE);
+        EnableWindow(GetDlgItem(controls,kShow),FALSE);
+        EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         Status(L"Parado. Escolha a janela ou monitor de origem.");
     }
     void StartSelected() {
@@ -259,10 +271,11 @@ struct App {
         poolSize=item.Size();
         pool=Direct3D11CaptureFramePool::CreateFreeThreaded(winDevice,DirectXPixelFormat::R16G16B16A16Float,2,poolSize);
         session=pool.CreateCaptureSession(item);
-        FitOutputWindow();
-        ShowWindow(output,SW_SHOWNOACTIVATE);
+        // Starting capture opens only the embedded preview. The large share
+        // window is opt-in and never silently reopened after a source change.
         session.StartCapture();
         running=true;
+        EnableWindow(GetDlgItem(controls,kShow),TRUE);
         ArmTimer(true);
         UpdateStatus();
     }
@@ -270,7 +283,8 @@ struct App {
         if (!running) return;
         std::wstring text = L"Origem: "; text += item.DisplayName().c_str();
         text += hdr ? L"\r\nHDR scRGB local. A transmissão depende do serviço."
-                    : L"\r\nSDR: compartilhe a janela 'HDR Bridge - Saida'.";
+                    : L"\r\nSDR com tone mapping.";
+        text += IsWindowVisible(output) ? L"\r\nSaída para Discord aberta." : L"\r\nPrévia interna; saída para Discord fechada.";
         auto extent=bridge::OutputExtent(resolution);
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
@@ -278,7 +292,10 @@ struct App {
         SetWindowTextW(output, hdr ? L"HDR Bridge - Saida HDR local" : L"HDR Bridge - Saida SDR");
     }
     void Tick() {
-        if (!running || IsIconic(output)) return;
+        if (!running) return;
+        bool showPreview=IsWindowVisible(controls) && !IsIconic(controls);
+        bool showOutput=IsWindowVisible(output) && !IsIconic(output);
+        if (!showPreview && !showOutput) return;
         ID3D11ShaderResourceView* none = nullptr;
         auto frame = pool.TryGetNextFrame();
         if (frame) {
@@ -314,29 +331,26 @@ struct App {
             frame.Close();
         }
         if (!image) return;
-        UINT width = imageWidth, height = imageHeight;
-        RECT client{}; GetClientRect(output, &client);
-        if (client.right <= 0 || client.bottom <= 0) return;
         auto extent=bridge::OutputExtent(resolution);
-        EnsureTarget(extent.width,extent.height);
-        float black[4] = {0,0,0,1};
-        context->ClearRenderTargetView(target.get(), black);
-        auto fitted=bridge::Fit(width,height,extent);
-        D3D11_VIEWPORT viewport{fitted.x,fitted.y,fitted.width,fitted.height,0,1};
-        context->RSSetViewports(1, &viewport);
-        auto rtv = target.get(); context->OMSetRenderTargets(1, &rtv, nullptr);
-        float values[4] = {hdr ? 1.0f : 0.0f, exposure, white, 0.65f};
-        context->UpdateSubresource(constants.get(), 0, nullptr, values, 0, 0);
-        auto cb = constants.get(); context->PSSetConstantBuffers(0, 1, &cb);
-        auto srv = image.get(); context->PSSetShaderResources(0, 1, &srv);
-        auto sampling = sampler.get(); context->PSSetSamplers(0, 1, &sampling);
-        context->IASetInputLayout(nullptr);
-        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->VSSetShader(vs.get(), nullptr, 0);
-        context->PSSetShader(ps.get(), nullptr, 0);
-        context->Draw(3, 0);
-        context->PSSetShaderResources(0, 1, &none);
-        check_hresult(swap->Present(0, 0));
+        programFrame.Ensure(device.get(),extent,hdr);
+        float values[4]={hdr ? 1.0f : 0.0f,exposure,white,0.65f};
+        context->UpdateSubresource(constants.get(),0,nullptr,values,0,0);
+        programFrame.Process(context.get(),image.get(),{imageWidth,imageHeight},
+            vs.get(),ps.get(),sampler.get(),constants.get());
+        if (showPreview) {
+            RECT client{}; GetClientRect(preview,&client);
+            if (client.right>0 && client.bottom>0) {
+                auto width=static_cast<UINT>(client.right),height=static_cast<UINT>(client.bottom);
+                EnsureSurface(preview,width,height,previewSwap,previewTarget,previewWidth,previewHeight);
+                programFrame.Blit(context.get(),previewTarget.get(),{width,height},vs.get(),displayShader.get(),sampler.get());
+                check_hresult(previewSwap->Present(0,0));
+            }
+        }
+        if (showOutput) {
+            EnsureSurface(output,extent.width,extent.height,swap,target,outputWidth,outputHeight);
+            programFrame.Blit(context.get(),target.get(),extent,vs.get(),displayShader.get(),sampler.get());
+            check_hresult(swap->Present(0,0));
+        }
     }
     HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0) {
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
@@ -380,10 +394,17 @@ struct App {
         SendMessageW(whiteSlider,TBM_SETPOS,TRUE,203);
         Child(L"BUTTON",L"Iniciar / trocar origem",WS_TABSTOP,20,332,230,32,kPick);
         Child(L"BUTTON",L"Parar",WS_TABSTOP,270,332,120,32,kStop);
-        status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,20,386,670,80);
-        Child(L"STATIC",L"Compartilhe a janela de saída no Discord. Sem áudio nesta versão.\r\nMonitor inteiro: deixe a saída em outro monitor para evitar espelho.\r\nA resolução e os FPS do serviço também precisam ser configurados nele.",0,20,480,680,62);
-        Child(L"BUTTON",L"Mostrar saída",WS_TABSTOP,20,560,170,32,kShow);
-        Child(L"BUTTON",L"Sair",WS_TABSTOP,570,560,120,32,kExit);
+        Child(L"STATIC",L"Prévia · resolução de processamento independente",0,20,374,330,22);
+        preview=CreateWindowExW(0,L"HdrBridgePreview",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
+            20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if (!preview) throw_last_error();
+        status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
+        Child(L"STATIC",L"A prévia é pequena; o quadro continua em 720p/1080p.\r\nPara compartilhar em resolução cheia, abra a saída para Discord.\r\nSem áudio nesta versão.",0,360,488,330,90);
+        Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
+        Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
+        Child(L"BUTTON",L"Sair",WS_TABSTOP,570,600,120,32,kExit);
+        EnableWindow(GetDlgItem(controls,kShow),FALSE);
+        EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         RefreshSources();
         // Only the controller is excluded; the output MUST remain capturable.
         SetWindowDisplayAffinity(controls, WDA_EXCLUDEFROMCAPTURE);
@@ -397,7 +418,14 @@ struct App {
         if (id == kPick) StartSelected();
         if (id == kRefresh || (id == kSourceKind && event == CBN_SELCHANGE)) RefreshSources();
         if (id == kStop) Stop();
-        if (id == kShow && running) ShowWindow(output, SW_RESTORE);
+        if (id == kShow && running) {
+            FitOutputWindow();
+            ShowWindow(output,SW_SHOWNOACTIVATE);
+            if (IsIconic(output)) ShowWindow(output,SW_RESTORE);
+            EnableWindow(GetDlgItem(controls,kHideOutput),TRUE);
+            Tick(); UpdateStatus();
+        }
+        if (id == kHideOutput) CloseOutput();
         if (id == kExit) { Stop(); DestroyWindow(controls); }
         if (id == kMode && event == CBN_SELCHANGE) {
             hdr = SendMessageW(modeBox, CB_GETCURSEL,0,0) == 1;
@@ -413,6 +441,14 @@ struct App {
             resolution=SendMessageW(resolutionBox,CB_GETCURSEL,0,0)==1 ? bridge::Resolution::P1080 : bridge::Resolution::P720;
             ReleaseSwap(); FitOutputWindow(); UpdateStatus();
         }
+    }
+    void CloseOutput() {
+        if (target) {
+            float black[4]={0,0,0,1}; context->ClearRenderTargetView(target.get(),black); swap->Present(0,0);
+        }
+        ShowWindow(output,SW_HIDE);
+        EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
+        UpdateStatus();
     }
     void Sliders() {
         exposure = static_cast<float>(static_cast<int>(SendMessageW(exposureSlider,TBM_GETPOS,0,0)))/10;
@@ -445,7 +481,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             }
             }
         } else if (hwnd == app.output) {
-            if (message == WM_CLOSE) { app.Stop(); return 0; }
+            if (message == WM_CLOSE) { app.CloseOutput(); return 0; }
             if (message == WM_DPICHANGED) {
                 auto suggested=reinterpret_cast<RECT*>(lparam);
                 SetWindowPos(hwnd,nullptr,suggested->left,suggested->top,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
@@ -468,8 +504,13 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         klass.hCursor=LoadCursorW(nullptr,IDC_ARROW); klass.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         klass.lpszClassName=L"HdrBridgeWindow";
         if (!RegisterClassW(&klass)) throw_last_error();
-        app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
-            CW_USEDEFAULT,CW_USEDEFAULT,740,650,nullptr,nullptr,instance,nullptr);
+        WNDCLASSW previewClass{};
+        previewClass.lpfnWndProc=DefWindowProcW; previewClass.hInstance=instance;
+        previewClass.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        previewClass.lpszClassName=L"HdrBridgePreview";
+        if (!RegisterClassW(&previewClass)) throw_last_error();
+        app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,
+            CW_USEDEFAULT,CW_USEDEFAULT,740,690,nullptr,nullptr,instance,nullptr);
         app.output=CreateWindowW(klass.lpszClassName,L"HDR Bridge - Saida SDR",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
             CW_USEDEFAULT,CW_USEDEFAULT,1280,760,nullptr,nullptr,instance,nullptr);
         if (!app.controls || !app.output) throw_last_error();

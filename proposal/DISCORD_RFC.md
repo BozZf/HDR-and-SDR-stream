@@ -42,6 +42,19 @@ Scale to the chosen output size with preserved aspect ratio and letterboxing.
 Resolution and frame-rate settings must feed the encoder configuration in the
 native integration; the standalone app only configures its intermediate output.
 
+### Compact preview independent of output resolution
+
+The standalone demonstrator now processes a full-resolution 720p/1080p GPU
+texture before showing a 320×180 preview embedded in its controller. The preview
+is a display copy of already-processed pixels, not a second HDR-to-SDR conversion.
+Starting capture does not automatically open a large desktop window.
+
+In a native Discord integration, feed the full-resolution texture to the encoder
+and independently downscale the local preview. Never derive encoded resolution
+from preview size. The standalone app still needs its optional full-size share
+window because it has no direct encoder integration or virtual camera; sharing
+a miniature window does not preserve full-resolution pixels at the receiver.
+
 Changing this setting restarts/reconfigures the media path cleanly at a keyframe
 boundary; do not briefly expose incorrectly tagged HDR frames to SDR receivers.
 Explain fallback in plain language (“A viewer's display is in SDR”). Do not

@@ -2,13 +2,15 @@
 
 Aplicativo nativo para Windows 11 que captura uma janela ou monitor em FP16 HDR e
 oferece saída SDR com tone mapping na GPU ou HDR scRGB local, mantendo o HDR do
-monitor ligado. Sem Electron, servidor ou navegador embutido.
+monitor ligado. Sem Electron, servidor ou navegador embutido. A versão 0.2 abre uma prévia pequena
+dentro da janela principal, sem abrir automaticamente uma janela gigante.
 
 ## Configuração da captura
 
 | Opção | Implementação |
 | --- | --- |
-| Resolução | 720p (1280×720) ou 1080p (1920×1080), com render target e área cliente da saída nas dimensões selecionadas. |
+| Resolução | Quadro de processamento em 720p (1280×720) ou 1080p (1920×1080), independente do tamanho da prévia. |
+| Prévia | Imagem de 320×180 dentro do HDR Bridge, alimentada pelo quadro já processado. |
 | Taxa de quadros | Alvo de 30 ou 60 fps, temporizador de alta resolução e prazos absolutos para evitar acumular o tempo de renderização. |
 | Monitor | Lista cada monitor ativo, identificador `DISPLAY`, resolução e indicação de principal. |
 | Aplicativo | Lista janelas visíveis por título e PID; selecione uma janela do aplicativo. |
@@ -18,7 +20,8 @@ monitor ligado. Sem Electron, servidor ou navegador embutido.
 A origem só muda ao clicar em **Iniciar / trocar origem**. Resolução, fps e modo
 de cor podem mudar durante a captura. **Atualizar lista** busca janelas abertas e
 monitores conectados. O programa rejeita uma janela fechada ou monitor removido
-antes de iniciar. O status mostra a origem ativa e a configuração da saída.
+antes de iniciar. O status mostra a origem ativa, a configuração do quadro e se a saída para o
+Discord está aberta. Fechar essa saída não encerra a captura nem a prévia.
 
 **Essas opções configuram a saída do app.** A resolução, taxa e formato efetivamente
 transmitidos pelo Discord ou outro serviço continuam sujeitos às configurações e
@@ -56,17 +59,41 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
 1. Mantenha HDR ativo no Windows e no conteúdo desejado.
 2. Escolha **Monitor** e qual monitor, ou **Aplicativo (janela)** e a janela.
 3. Escolha **720p/1080p**, **30/60 fps** e **SDR/HDR**.
-4. Clique em **Iniciar / trocar origem**.
-5. Para amigos com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no
-   Discord. Ajuste a qualidade também no próprio serviço.
-6. Mantenha a janela de saída aberta e sem minimizar. Pode esconder os controles
-   pelo X e reabrir pelo ícone da bandeja. **Sair** encerra o programa.
+4. Clique em **Iniciar / trocar origem**. A imagem aparece na prévia pequena
+   dentro do app. Nenhuma janela grande é aberta automaticamente.
+5. Quando quiser compartilhar, clique em **Abrir saída para Discord**. Para amigos
+   com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
+   Ajuste a qualidade também no próprio serviço.
+6. Durante o compartilhamento, mantenha essa saída aberta e sem minimizar. Pode
+   esconder os controles pelo X e reabrir pelo ícone da bandeja.
+7. **Fechar saída**, ou o X da janela de saída, fecha só essa janela; a prévia
+   continua. **Parar** encerra a captura e apaga a imagem. **Sair** encerra o app.
 
-O app ajusta a imagem à resolução escolhida preservando proporção, com barras
-pretas quando necessário. A saída tem área cliente fixa na resolução escolhida;
-a janela 1080p pode exceder a área útil de uma tela 1080p por causa das bordas.
-Escolha 720p para uma janela menor. Mudar a escala DPI mantém as dimensões da
-saída; verificar isso em monitores com escalas diferentes faz parte do teste manual.
+## Prévia pequena e resolução de transmissão
+
+A conversão de cor e o redimensionamento geram primeiro uma textura GPU em
+1280×720 ou 1920×1080. A miniatura apenas mostra uma cópia reduzida desse quadro;
+ela não reduz a textura original. O segundo passe de exibição não aplica tone
+mapping novamente, nem altera os pixels do quadro processado. Proporção e barras
+pretas são preservadas.
+
+**Isso mantém a resolução de processamento, não cria uma saída de vídeo virtual.**
+O Discord ainda captura uma janela, e pode receber somente os pixels visíveis
+dessa janela. Por isso a saída para compartilhar permanece separada e com a área
+cliente na resolução escolhida. Compartilhar a miniatura não garante 1080p; os
+controles e a prévia são excluídos de captura para evitar espelho e vazamento da
+interface. Use o botão **Abrir saída para Discord** quando precisar transmitir.
+
+Para transmitir o quadro completo sem manter essa janela grande aberta, ainda
+seria necessário implementar uma saída por câmera virtual ou integração direta
+com o serviço. Este aplicativo não implementa esse caminho nem o áudio.
+
+A saída 1080p pode exceder a área útil de uma tela 1080p por causa das bordas.
+Ela só aparece por ação explícita. Não é janela sempre no topo nem é trazida
+para frente a cada frame. Se ambos os visores estiverem ocultos/minimizados, a
+renderização pausa até algum deles voltar; a sessão de captura continua ativa.
+A saída conserva as dimensões ao mudar de monitor/DPI; isso requer teste manual
+em monitores com escalas diferentes.
 
 ## HDR e SDR
 
@@ -105,6 +132,11 @@ do serviço; não há garantia de que ele não aplique outra conversão de cor.
 - [`main`](https://github.com/BozZf/HDR-and-SDR-stream/tree/main): aplicativo.
 - [`discord-proposal`](https://github.com/BozZf/HDR-and-SDR-stream/tree/discord-proposal):
   aplicativo mais proposta em inglês e política HDR/SDR testável. Nada foi enviado ao Discord.
+
+`PreviewPipelineTests` executa o processamento e a exibição reais no D3D11 WARP,
+com quadros 720p/1080p em SDR/HDR e miniaturas de dois tamanhos. Verifica que os
+pixels e dimensões do quadro completo não mudam, que a prévia não aplica tone
+mapping novamente e que o conteúdo pode ser apagado.
 
 `ColorPipelineTests` executa o HLSL de produção no Direct3D WARP e testa a faixa
 SDR, neutralidade, altas luzes, exposição e preservação HDR. `StreamSettingsTests`

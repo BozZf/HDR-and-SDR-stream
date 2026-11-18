@@ -8,6 +8,11 @@ cbuffer Settings : register(b0) {
     float shoulderStart;
 };
 struct Vertex { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
+// Processed SDR is already gamma encoded, and HDR is already linear scRGB.
+// Present either unchanged; applying PS again would tone-map SDR twice.
+float4 DisplayPS(Vertex v) : SV_TARGET {
+    return float4(source.Sample(linearSampler, v.uv).rgb, 1);
+}
 Vertex VS(uint id : SV_VertexID) {
     Vertex v;
     v.uv = float2((id << 1) & 2, id & 2);

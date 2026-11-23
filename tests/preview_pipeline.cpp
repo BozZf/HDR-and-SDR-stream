@@ -9,6 +9,7 @@
 #include <iostream>
 #include <stdexcept>
 #include "video_frame.h"
+#include "sdr_readback.h"
 #include "shader_source.h"
 using winrt::com_ptr;
 using winrt::check_hresult;
@@ -74,6 +75,20 @@ int main() {
                 context->UpdateSubresource(settings.get(),0,nullptr,values,0,0);
                 frame.Process(context.get(),source.get(),{1,1},vertex.get(),color.get(),sampler.get(),settings.get());
                 auto before=Snapshot(device.get(),context.get(),frame.Texture(),hdr ? 8 : 4);
+                bridge::SdrReadback compatibility;
+                if (!hdr) {
+                    compatibility.Update(device.get(),context.get(),frame.Texture());
+                    Require(compatibility.Width()==extent.width && compatibility.Height()==extent.height,
+                        "GDI readback must retain selected resolution");
+                    Require(compatibility.Pixels()==before,"GDI pixels must match the corrected SDR GPU frame");
+                    compatibility.Clear();
+                    Require(compatibility.Pixels().empty(),"Clear compatibility pixels on stop");
+                } else {
+                    bool rejected=false;
+                    try { compatibility.Update(device.get(),context.get(),frame.Texture()); }
+                    catch(winrt::hresult_error const&) { rejected=true; }
+                    Require(rejected,"Compatibility must reject HDR instead of interpreting FP16 as SDR");
+                }
                 auto original=frame.Texture();
                 for (auto mini : {bridge::Extent{320,180},bridge::Extent{480,270}}) {
                     auto desc=inputDesc;

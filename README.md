@@ -65,10 +65,11 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
 5. Quando quiser compartilhar, clique em **Abrir saída para Discord**. Para amigos
    com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
    Ajuste a qualidade também no próprio serviço.
-6. A janela de saída tem barra de título e botão de minimizar. Ao minimizar,
-   a apresentação da saída pausa. Restaure pela barra de tarefas ou pelo botão
-   de saída do Bridge. Durante o compartilhamento, mantenha a saída aberta e
-   esconda os controles pelo X, se quiser.
+6. O botão **minimizar** da saída a põe atrás das outras janelas e mantém a
+   apresentação de vídeo ativa. Clique novamente em **Abrir saída para Discord**
+   para trazê-la à frente. Atalhos do Windows que minimizam todas as janelas
+   podem interromper a captura do serviço. Use o botão da própria saída durante
+   o compartilhamento.
 7. **Fechar saída**, **X** ou **Esc** com a saída em foco fecha a janela e mantém
    a prévia. **Parar** encerra a captura. **Sair** encerra o app.
 

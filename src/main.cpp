@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -177,15 +176,22 @@ struct App {
         if (running) { schedule.Advance(Now()); ArmTimer(); }
     }
     void FitOutputWindow() {
+        if (IsIconic(output)) return;
         auto extent=bridge::OutputExtent(resolution);
+        RECT frame{0,0,static_cast<LONG>(extent.width),static_cast<LONG>(extent.height)};
+        auto style=static_cast<DWORD>(GetWindowLongPtrW(output,GWL_STYLE));
+        auto exStyle=static_cast<DWORD>(GetWindowLongPtrW(output,GWL_EXSTYLE));
+        if (!AdjustWindowRectExForDpi(&frame,style,FALSE,exStyle,GetDpiForWindow(output))) throw_last_error();
         RECT current{};
         if (!GetWindowRect(output,&current)) throw_last_error();
         MONITORINFO info{}; info.cbSize=sizeof(info);
         if (!GetMonitorInfoW(MonitorFromWindow(output,MONITOR_DEFAULTTONEAREST),&info)) throw_last_error();
-        auto width=static_cast<LONG>(extent.width), height=static_cast<LONG>(extent.height);
-        auto const& monitor=info.rcMonitor;
-        auto x=std::clamp(current.left,monitor.left,std::max(monitor.left,monitor.right-width));
-        auto y=std::clamp(current.top,monitor.top,std::max(monitor.top,monitor.bottom-height));
+        auto width=frame.right-frame.left, height=frame.bottom-frame.top;
+        auto const& workArea=info.rcWork;
+        auto x=std::clamp(current.left,workArea.left,std::max(workArea.left,workArea.right-width));
+        auto y=std::clamp(current.top,workArea.top,std::max(workArea.top,workArea.bottom-height));
+        if (current.left==x && current.top==y && current.right-current.left==width && current.bottom-current.top==height)
+            return;
         if (!SetWindowPos(output,nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
     }
     static BOOL CALLBACK AddMonitor(HMONITOR monitor,HDC,LPRECT,LPARAM data) {
@@ -404,7 +410,9 @@ struct App {
         std::wstring text = L"Origem: "; text += item.DisplayName().c_str();
         text += hdr ? L"\r\nHDR scRGB local. A transmissão depende do serviço."
                     : gdiOutput ? L"\r\nSDR compatível (GDI; maior uso de CPU)." : L"\r\nSDR com tone mapping.";
-        text += IsWindowVisible(output) ? L"\r\nSaída para Discord aberta." : L"\r\nPrévia interna; saída para Discord fechada.";
+        if (IsIconic(output)) text+=L"\r\nSaída minimizada. Restaure para compartilhar.";
+        else if (IsWindowVisible(output)) text+=L"\r\nJanela de saída aberta.";
+        else text+=L"\r\nPrévia interna; janela de saída fechada.";
         auto extent=bridge::OutputExtent(resolution);
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
@@ -526,7 +534,7 @@ struct App {
             20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
         status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"Compartilhe a janela de saída sem moldura.\r\nArraste pela imagem ou feche com Esc.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
+        Child(L"STATIC",L"Se disponível, compartilhe só a área cliente.\r\nRestaure a saída para transmitir.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
         audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
         Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
         Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
@@ -550,9 +558,9 @@ struct App {
         if (id == kRefresh || (id == kSourceKind && event == CBN_SELCHANGE)) RefreshSources();
         if (id == kStop) Stop();
         if (id == kShow && running) {
+            if (IsIconic(output)) ShowWindow(output,SW_RESTORE);
             FitOutputWindow();
             ShowWindow(output,SW_SHOWNOACTIVATE);
-            if (IsIconic(output)) ShowWindow(output,SW_RESTORE);
             EnableWindow(GetDlgItem(controls,kHideOutput),TRUE);
             Tick(); UpdateStatus();
         }
@@ -624,13 +632,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             if (message==WM_PRINTCLIENT && app.gdiOutput) {
                 app.DrawGdiOutput(reinterpret_cast<HDC>(wparam)); return 0;
             }
-            if (message==WM_LBUTTONDOWN) {
-                POINT screen{GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)};
-                ClientToScreen(hwnd,&screen);
-                return DefWindowProcW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,MAKELPARAM(screen.x,screen.y));
-            }
             if (message==WM_KEYDOWN && wparam==VK_ESCAPE) { app.CloseOutput(); return 0; }
             if (message == WM_CLOSE) { app.CloseOutput(); return 0; }
+            if (message==WM_SIZE && app.running) {
+                if (wparam==SIZE_RESTORED) {
+                    auto extent=bridge::OutputExtent(app.resolution);
+                    if (LOWORD(lparam)!=extent.width || HIWORD(lparam)!=extent.height) app.FitOutputWindow();
+                }
+                app.UpdateStatus();
+            }
             if (message == WM_DPICHANGED) {
                 auto suggested=reinterpret_cast<RECT*>(lparam);
                 SetWindowPos(hwnd,nullptr,suggested->left,suggested->top,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
@@ -664,7 +674,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         if (!RegisterClassW(&previewClass)) throw_last_error();
         app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,
             CW_USEDEFAULT,CW_USEDEFAULT,740,690,nullptr,nullptr,instance,nullptr);
-        app.output=CreateWindowExW(WS_EX_APPWINDOW,outputClass.lpszClassName,L"HDR Bridge - Saida SDR",WS_POPUP,
+        app.output=CreateWindowExW(WS_EX_APPWINDOW,outputClass.lpszClassName,L"HDR Bridge - Saida SDR",
+            WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
             0,0,1280,720,nullptr,nullptr,instance,nullptr);
         if (!app.controls || !app.output) throw_last_error();
         app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);

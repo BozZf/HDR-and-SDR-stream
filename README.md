@@ -65,11 +65,12 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
 5. Quando quiser compartilhar, clique em **Abrir saída para Discord**. Para amigos
    com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
    Ajuste a qualidade também no próprio serviço.
-6. Durante o compartilhamento, mantenha essa saída aberta e sem minimizar. Pode
-   esconder os controles pelo X e reabrir pelo ícone da bandeja.
-7. Arraste a saída pela imagem para movê-la. **Fechar saída** ou **Esc** com a
-   saída em foco fecha a janela e mantém a prévia. **Parar** encerra a captura e
-   apaga a imagem. **Sair** encerra o app.
+6. A janela de saída tem barra de título e botão de minimizar. Ao minimizar,
+   a apresentação da saída pausa. Restaure pela barra de tarefas ou pelo botão
+   de saída do Bridge. Durante o compartilhamento, mantenha a saída aberta e
+   esconda os controles pelo X, se quiser.
+7. **Fechar saída**, **X** ou **Esc** com a saída em foco fecha a janela e mantém
+   a prévia. **Parar** encerra a captura. **Sair** encerra o app.
 
 ## Prévia pequena e resolução de transmissão
 
@@ -91,17 +92,36 @@ seria necessário implementar uma saída por câmera virtual ou integração dir
 com o serviço. Este aplicativo não implementa esse caminho de vídeo virtual. O áudio usa o
 encaminhamento separado descrito abaixo.
 
-A saída sem moldura mantém a área de imagem exata de 720p ou 1080p. Em um
-monitor de 1920×1080 ela pode preencher toda a tela no modo 1080p. Ela aparece
-ao clicar no botão de saída. Se ambos os visores estiverem ocultos/minimizados, a
+A área interna da janela de saída mantém as dimensões escolhidas. A moldura
+fica fora dessa área. Em um monitor de 1920×1080, pode faltar espaço para a
+moldura e a área interna de 1080p juntas. Ela aparece ao clicar no botão de
+saída. Se ambos os visores estiverem ocultos ou minimizados, a
 renderização pausa até algum deles voltar; a sessão de captura continua ativa.
 A saída conserva as dimensões ao mudar de monitor/DPI; isso requer teste manual
 em monitores com escalas diferentes.
+
+## Compartilhar somente a imagem
+
+O serviço que lê a janela decide se inclui a moldura. No OBS, escolha
+**Captura de janela**, método **Windows Graphics Capture**, e marque **Área
+cliente**. O ScreenShare 1.4.6 pede esse recorte ao OBS no modo **Janela
+(padrão)** com WGC. No Go Live, o HDR Bridge fornece a janela e o Discord decide
+como capturá-la. A interface documentada do Go Live não oferece um recorte da
+moldura que o Bridge possa controlar.
 
 ## Som em outros serviços
 
 O botão **Áudio...** abre uma janela de configuração sem aumentar a janela
 principal. O som fica **desligado por padrão**.
+
+O Windows permite capturar o áudio por aplicativo via WASAPI sem driver extra.
+Se o serviço já captura a fonte de áudio, use essa função diretamente. No OBS,
+adicione **Captura de áudio de aplicativo** e selecione o jogo original,
+mantendo a janela do HDR Bridge como fonte de vídeo. No ScreenShare 1.4.6,
+**Áudio do sistema** captura a saída de som selecionada. A opção **Áudio da fonte**
+segue a janela escolhida e, ao selecionar o Bridge, não seleciona o jogo original.
+O cabo abaixo serve para entregar o áudio do Bridge quando o serviço espera um
+dispositivo de entrada independente.
 
 Em **Artifacts**, `HdrBridge-windows-x64-with-audio` inclui o app, o pacote
 original VB-CABLE e [instruções de instalação](docs/AUDIO-SETUP.txt). O driver

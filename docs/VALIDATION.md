@@ -37,8 +37,8 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
   caixas de diálogo. Confirmar que os controles continuam visíveis ao abrir e
   restaurar a janela, e que o tema escolhido é mantido ao reabrir.
 
-- Iniciar captura: só a prévia de 320×180 abre dentro da janela principal; nenhuma
-  saída grande é exibida automaticamente.
+- Iniciar a captura deve exibir a prévia 16:9 no painel da janela principal.
+  Abrir a saída grande exige acionar **Abrir saída**.
 - Abrir/fechar saída para Discord: mesma imagem processada, sem mudança de origem
   ou cor; fechar pelo X não para a prévia.
 - Executar `PreviewPipelineTests`: miniaturas 320×180/480×270 não alteram textura
@@ -67,6 +67,8 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - Destino vazio: recusar ativação de áudio, mantendo vídeo funcionando.
 - Ouvir a ponta de gravação do cabo em outro app; confirmar volume, canais e
   ausência de som local duplicado. Testar 44,1/48 kHz no dispositivo de destino.
+- Com o Bridge reproduzindo nos fones, silenciar somente o HDR Bridge no Mixer
+  de volume e conferir o áudio local e o recebido pelo espectador.
 - Volume 0/100/200%, clipping controlado, pausas, fonte em silêncio e retomada.
 - Desconectar destino: mostrar erro sem interromper o vídeo; atualizar e reaplicar.
 - Parar/fechar fonte/sair: nenhum áudio continua sendo enviado. Fechar só a saída
@@ -82,7 +84,7 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
   afastar o cursor. Verificar a exibição local, o desaparecimento ao sair e a
   ausência do painel no espectador, inclusive com DPI diferente.
 - Pressionar **Recolher** durante uma live e cobrir a saída com outra janela.
-  Conferir quadros novos no espectador. **Abrir saída para Discord** deve trazê-la
+  Conferir quadros novos no espectador. **Abrir saída** deve trazê-la
   à frente sem mudar a fonte. Repetir com GPU e GDI.
 - Trocar resolução enquanto a saída está atrás das janelas e trazê-la à frente
   para conferir as dimensões. Fechar a saída com X ou Esc. A prévia deve continuar.

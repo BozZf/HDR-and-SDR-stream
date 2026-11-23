@@ -11,7 +11,7 @@ dois painéis e usa os temas **Escuro** e **Claro** do seletor **Tema**. A prefe
 | Opção | Implementação |
 | --- | --- |
 | Resolução | Quadro de processamento em 720p (1280×720) ou 1080p (1920×1080), independente do tamanho da prévia. |
-| Prévia | Imagem de 320×180 dentro do HDR Bridge, alimentada pelo quadro já processado. |
+| Prévia | Imagem 16:9 dentro do HDR Bridge, ajustada ao espaço do painel e alimentada pelo quadro já processado. |
 | Taxa de quadros | Alvo de 30 ou 60 fps, temporizador de alta resolução e prazos absolutos para evitar acumular o tempo de renderização. |
 | Monitor | Lista cada monitor ativo, identificador `DISPLAY`, resolução e indicação de principal. |
 | Aplicativo | Lista janelas visíveis por título e PID; selecione uma janela do aplicativo. |
@@ -19,9 +19,9 @@ dois painéis e usa os temas **Escuro** e **Claro** do seletor **Tema**. A prefe
 | Áudio | Aplicativo capturado (árvore de processos) ou sistema, com volume e destino selecionável; desligado por padrão. |
 | Ajustes SDR | Exposição e branco de referência manual; desabilitados em HDR. |
 
-A origem só muda ao clicar em **Iniciar / trocar origem**. Resolução, fps e modo
-de cor podem mudar durante a captura. **Atualizar lista** busca janelas abertas e
-monitores conectados. O programa rejeita uma janela fechada ou monitor removido
+A origem só muda ao clicar em **Iniciar captura** ou **Trocar origem**. Resolução,
+fps e modo de cor podem mudar durante a captura. **Atualizar** busca janelas
+abertas e monitores conectados. O programa rejeita uma janela fechada ou monitor removido
 antes de iniciar. O status mostra a origem ativa, a configuração do quadro e se a saída para o
 Discord está aberta. Fechar essa saída não encerra a captura nem a prévia.
 
@@ -61,23 +61,23 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
 1. Mantenha HDR ativo no Windows e no conteúdo desejado.
 2. Escolha **Monitor** e qual monitor, ou **Aplicativo (janela)** e a janela.
 3. Escolha **720p/1080p**, **30/60 fps** e **SDR/HDR**.
-4. Clique em **Iniciar / trocar origem**. A imagem aparece na prévia pequena
+4. Clique em **Iniciar captura**. A imagem aparece na prévia pequena
    dentro do app. Nenhuma janela grande é aberta automaticamente.
-5. Quando quiser compartilhar, clique em **Abrir saída para Discord**. Para amigos
+5. Quando quiser compartilhar, clique em **Abrir saída**. Para amigos
    com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
    Ajuste a qualidade também no próprio serviço.
 6. Passe o mouse no **canto superior direito** da saída para mostrar seus
-   controles locais, que acompanham a escolha em **Tema**. Use **Recolher** para colocar a janela atrás das outras
-   sem suspender o vídeo. O mesmo comando está na janela principal e em **F9**
-   quando a saída está em foco. Clique em **Abrir saída para Discord** para
-   trazê-la à frente.
+   controles locais, que acompanham a escolha em **Tema**. Use **Recolher** para
+   colocar a janela atrás das outras sem suspender o vídeo. O mesmo comando está
+   na janela principal e em **F9** quando a saída está em foco. Clique em
+   **Abrir saída** para trazê-la à frente.
 7. **Fechar saída** ou **Esc** com a saída em foco fecha a janela e mantém a
    prévia. **Parar** encerra a captura. **Sair** encerra o app.
 
 O **X da janela principal** pergunta se você quer minimizar para a bandeja ou
 sair. Se marcar **Salvar minha escolha**, o X repete a ação nas próximas vezes.
 Clique em **Perguntar ao fechar** para restaurar a confirmação. O botão
-**Sair do Bridge** encerra o app e a captura mesmo se o X estiver configurado
+**Sair** encerra o app e a captura mesmo se o X estiver configurado
 para minimizar.
 
 ## Prévia pequena e resolução de transmissão
@@ -93,7 +93,7 @@ O Discord ainda captura uma janela, e pode receber somente os pixels visíveis
 dessa janela. Por isso a saída para compartilhar permanece separada e com a área
 cliente na resolução escolhida. Compartilhar a miniatura não garante 1080p; os
 controles e a prévia são excluídos de captura para evitar espelho e vazamento da
-interface. Use o botão **Abrir saída para Discord** quando precisar transmitir.
+interface. Use o botão **Abrir saída** quando precisar transmitir.
 
 Para transmitir o quadro completo sem manter essa janela grande aberta, ainda
 seria necessário implementar uma saída por câmera virtual ou integração direta
@@ -123,7 +123,7 @@ imagem num espectador enquanto a origem estiver em movimento.
 
 ## Som em outros serviços
 
-O botão **Áudio...** abre uma janela de configuração sem aumentar a janela
+O botão **Áudio…** abre uma janela de configuração sem aumentar a janela
 principal. O som fica **desligado por padrão**.
 
 O Windows permite capturar o áudio por aplicativo via WASAPI sem driver extra.
@@ -135,11 +135,28 @@ segue a janela escolhida e, ao selecionar o Bridge, não seleciona o jogo origin
 O cabo abaixo serve para entregar o áudio do Bridge quando o serviço espera um
 dispositivo de entrada independente.
 
-Em **Artifacts**, `HdrBridge-windows-x64-with-audio` inclui o app, o pacote
-original VB-CABLE e [instruções de instalação](docs/AUDIO-SETUP.txt). O driver
-é opcional. O Windows pede privilégios de administrador para a instalação e
-o fornecedor orienta reiniciar depois. O artefato `HdrBridge-windows-x64`
-contém o executável portátil.
+### Como evitar áudio duplicado
+
+Se você ouvir duas cópias do som, o jogo ou aplicativo pode estar tocando nos
+fones ao mesmo tempo que o Bridge reproduz o áudio encaminhado. Escolha uma
+destas opções.
+
+- **Mixer de volume do Windows.** Com o áudio do Bridge ativo, abra
+  **Configurações → Sistema → Som → Mixer de volume**. Em **Aplicativos**,
+  silencie somente o **HDR Bridge** e mantenha o som do jogo ou aplicativo de
+  origem. Confirme que quem assiste ainda ouve o áudio. Se silenciar o Bridge
+  também cortar o som da transmissão, use o cabo virtual. [Ajuda do Windows sobre o Mixer de volume](https://support.microsoft.com/pt-br/windows/hardware/audio/fix-app-audio-not-working-while-system-sounds-work-in-windows)
+- **VB-CABLE.** Instale o cabo virtual, selecione **CABLE Input** como destino
+  no Bridge e **CABLE Output** como entrada no serviço de transmissão. Assim, o
+  áudio encaminhado vai para o cabo e você ouve o som original nos fones.
+  [Baixar VB-CABLE no site oficial da VB-Audio](https://vb-audio.com/Cable/)
+
+### Configurar o cabo virtual
+
+O ZIP `with-audio` inclui o app, o instalador opcional do VB-CABLE e o guia de
+configuração. O fornecedor orienta executar o instalador como administrador e
+reiniciar o Windows após a instalação.
+[Última release](https://github.com/BozZf/HDR-and-SDR-stream/releases/latest) · [Guia de áudio](docs/AUDIO-SETUP.txt)
 
 1. Instale o driver na pasta **VB-CABLE** do pacote com áudio ou use um
    dispositivo virtual de áudio que já esteja instalado no Windows.
@@ -149,7 +166,7 @@ contém o executável portátil.
    chamadas, excluindo o processo do HDR Bridge para evitar realimentar sua saída.
 3. Em **Destino**, escolha a ponta de reprodução do cabo virtual. Exemplo:
    `CABLE Input`. A lista contém dispositivos ativos do Windows; não há seleção
-   automática. Não escolha seus alto-falantes/fones: isso pode duplicar o som local.
+   automática.
 4. Clique em **Aplicar áudio**, inicie a captura de vídeo e veja o indicador de
    nível. Você pode ajustar o volume ou reaplicar durante a captura.
 5. No Discord ou outro serviço, escolha a ponta de gravação correspondente como
@@ -170,9 +187,9 @@ O aplicativo não mistura seu microfone real com o cabo. Para enviar ambos por u
 O worker usa WASAPI process-loopback no Windows 11, PCM estéreo 48 kHz/16 bits e
 renderização compartilhada com conversão do Windows para o destino. A fila é
 limitada a 250 ms e descarta áudio antigo em sobrecarga; underruns geram silêncio.
-Nenhuma reprodução adicional é enviada automaticamente aos seus fones. A fonte
-original continua tocando normalmente. Um erro de áudio não interrompe o vídeo;
-o status mostra o código e permite reaplicar após reconectar o dispositivo.
+O áudio original continua tocando e o Bridge encaminha a cópia para o destino
+escolhido. Se houver um erro de áudio, o vídeo continua. O status mostra o código
+e permite reaplicar após reconectar o dispositivo.
 Não há ressincronização A/V adaptativa ou mistura de fontes nesta versão.
 
 ## Tela branca em outro app de transmissão

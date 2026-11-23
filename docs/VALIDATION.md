@@ -64,6 +64,12 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - GDI SDR: selecionar saída correta no outro serviço; comparar com a apresentação
   GPU em 720p/1080p e 30/60 fps, inclusive ao alternar modos em tempo real.
 - GDI: confirmar ausência de imagem antiga ao fechar/reabrir ou parar captura.
+- Na saída GDI, mover o mouse sobre a origem e sobre a saída. Conferir se há
+  piscar no monitor HDR local e na transmissão do ScreenShare separadamente.
+- No Go Live, selecionar novamente a saída SDR e verificar que a imagem chega
+  sem barra de título em 720p e 1080p. Arrastar pela imagem e fechar com Esc.
+- Extrair o pacote com áudio em um Windows sem cabo instalado, instalar o driver
+  da pasta VB-CABLE, reiniciar e confirmar CABLE Input e CABLE Output no Windows.
 - Medir sincronismo A/V na ponta remota. Não prometer sincronismo por testes de fila.
 
 ## Medir desempenho

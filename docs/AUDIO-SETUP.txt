@@ -1,0 +1,19 @@
+HDR Bridge para Windows 11 x64 com VB-CABLE
+
+Extraia todos os arquivos deste ZIP antes de abrir os executáveis.
+
+1. Se o CABLE Input ainda não estiver instalado, abra a pasta VB-CABLE.
+   Clique com o botão direito em VBCABLE_Setup_x64.exe e escolha Executar
+   como administrador. Clique em Install Driver e reinicie o Windows.
+2. Abra HdrBridge.exe e clique em Áudio. Selecione a fonte desejada,
+   escolha CABLE Input como destino e clique em Aplicar áudio.
+3. Na plataforma de transmissão, selecione CABLE Output como entrada
+   de áudio. A entrada do cabo carrega o áudio encaminhado pelo Bridge.
+
+Use a instalação do driver apenas uma vez. Se você só precisa de vídeo,
+pode abrir o HDR Bridge diretamente. A instalação do VB-CABLE é opcional.
+
+VB-CABLE é fornecido pela VB-Audio Software sob o modelo donationware.
+Você pode apoiar o projeto com uma doação ou adquirir uma licença.
+Informações e apoio em https://vb-audio.com/Cable/
+Termos de distribuição em https://vb-audio.com/Services/licensing.htm

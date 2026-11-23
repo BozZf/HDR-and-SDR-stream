@@ -77,10 +77,18 @@ int main() {
                 auto before=Snapshot(device.get(),context.get(),frame.Texture(),hdr ? 8 : 4);
                 bridge::SdrReadback compatibility;
                 if (!hdr) {
-                    compatibility.Update(device.get(),context.get(),frame.Texture());
+                    Require(compatibility.Update(device.get(),context.get(),frame.Texture()),
+                        "First SDR frame must request a repaint");
                     Require(compatibility.Width()==extent.width && compatibility.Height()==extent.height,
                         "GDI readback must retain selected resolution");
                     Require(compatibility.Pixels()==before,"GDI pixels must match the corrected SDR GPU frame");
+                    Require(!compatibility.Update(device.get(),context.get(),frame.Texture()),
+                        "An unchanged frame must not request another repaint");
+                    frame.Clear(context.get());
+                    Require(compatibility.Update(device.get(),context.get(),frame.Texture()),
+                        "Changed pixels at the same resolution must request a repaint");
+                    Require(compatibility.Pixels()!=before,"Readback must replace stale frame pixels");
+                    frame.Process(context.get(),source.get(),{1,1},vertex.get(),color.get(),sampler.get(),settings.get());
                     compatibility.Clear();
                     Require(compatibility.Pixels().empty(),"Clear compatibility pixels on stop");
                 } else {

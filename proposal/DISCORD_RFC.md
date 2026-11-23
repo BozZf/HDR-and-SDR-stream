@@ -42,6 +42,20 @@ Scale to the chosen output size with preserved aspect ratio and letterboxing.
 Resolution and frame-rate settings must feed the encoder configuration in the
 native integration; the standalone app only configures its intermediate output.
 
+The standalone demonstrator now also provides opt-in WASAPI application/system
+loopback and forwarding to a user-selected audio render endpoint. Sending that
+audio to an unrelated service generally needs an external virtual audio device
+and explicit selection of its capture endpoint in the receiver. This is not
+automatic attachment of audio to a shared HWND. A native Discord integration
+should retain its existing audio/clock path and avoid this extra routing step.
+
+For capturers unable to read the standalone Direct3D output, the demonstrator
+offers an explicit SDR GDI presentation fallback after tone mapping. It copies
+the processed GPU frame to CPU memory and is therefore a compatibility option,
+not the default performance path. It does not prove compatibility with an
+unexamined third-party capturer, and it cannot expose the deliberately excluded
+controller/preview window.
+
 ### Compact preview independent of output resolution
 
 The standalone demonstrator now processes a full-resolution 720p/1080p GPU

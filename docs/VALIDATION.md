@@ -43,6 +43,29 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - Trocar SDR/HDR em ambas as resoluções e taxas; ajustes SDR continuam funcionando.
 - Executar `StreamSettingsTests`: dimensões, aspecto, prazos e descarte de atrasos.
 
+## Áudio e compatibilidade (validação manual necessária)
+
+- Áudio desligado inicialmente, sem captura nem reprodução adicional.
+- Aplicativo: tocar som na janela escolhida e em outro processo; só o escolhido
+  e seus filhos devem aparecer no cabo virtual.
+- Sistema: confirmar que inclui sons dos demais apps, mas não realimenta o que
+  o HDR Bridge envia ao destino. Não habilitar monitoramento do cabo para si mesmo.
+- Origem monitor com modo áudio Aplicativo: indicar configuração inválida sem
+  capturar silenciosamente todo o sistema.
+- Destino vazio: recusar ativação de áudio, mantendo vídeo funcionando.
+- Ouvir a ponta de gravação do cabo em outro app; confirmar volume, canais e
+  ausência de som local duplicado. Testar 44,1/48 kHz no dispositivo de destino.
+- Volume 0/100/200%, clipping controlado, pausas, fonte em silêncio e retomada.
+- Desconectar destino: mostrar erro sem interromper o vídeo; atualizar e reaplicar.
+- Parar/fechar fonte/sair: nenhum áudio continua sendo enviado. Fechar só a saída
+  de vídeo deve manter captura e áudio conforme o estado exibido.
+- Áudio segue ativo ao esconder controles, mesmo se o processamento de vídeo
+  estiver pausado por ambos os visores estarem ocultos.
+- GDI SDR: selecionar saída correta no outro serviço; comparar com a apresentação
+  GPU em 720p/1080p e 30/60 fps, inclusive ao alternar modos em tempo real.
+- GDI: confirmar ausência de imagem antiga ao fechar/reabrir ou parar captura.
+- Medir sincronismo A/V na ponta remota. Não prometer sincronismo por testes de fila.
+
 ## Medir desempenho
 
 Comparar 1080p30, 1440p30, 4K30 e 1080p60, com mesma origem e mesmo serviço.

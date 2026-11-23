@@ -2,7 +2,7 @@
 
 Aplicativo nativo para Windows 11 que captura uma janela ou monitor em FP16 HDR e
 oferece saída SDR com tone mapping na GPU ou HDR scRGB local, mantendo o HDR do
-monitor ligado. Sem Electron, servidor ou navegador embutido. A versão 0.2 abre uma prévia pequena
+monitor ligado. Sem Electron, servidor ou navegador embutido. A versão 0.3 inclui áudio roteável e uma prévia pequena
 dentro da janela principal, sem abrir automaticamente uma janela gigante.
 
 ## Configuração da captura
@@ -14,7 +14,8 @@ dentro da janela principal, sem abrir automaticamente uma janela gigante.
 | Taxa de quadros | Alvo de 30 ou 60 fps, temporizador de alta resolução e prazos absolutos para evitar acumular o tempo de renderização. |
 | Monitor | Lista cada monitor ativo, identificador `DISPLAY`, resolução e indicação de principal. |
 | Aplicativo | Lista janelas visíveis por título e PID; selecione uma janela do aplicativo. |
-| Cor | SDR com tone mapping ou HDR scRGB preservado na saída local. |
+| Cor | SDR GPU, HDR scRGB local ou SDR de compatibilidade GDI para outros capturadores. |
+| Áudio | Aplicativo capturado (árvore de processos) ou sistema, com volume e destino selecionável; desligado por padrão. |
 | Ajustes SDR | Exposição e branco de referência manual; desabilitados em HDR. |
 
 A origem só muda ao clicar em **Iniciar / trocar origem**. Resolução, fps e modo
@@ -86,7 +87,8 @@ interface. Use o botão **Abrir saída para Discord** quando precisar transmitir
 
 Para transmitir o quadro completo sem manter essa janela grande aberta, ainda
 seria necessário implementar uma saída por câmera virtual ou integração direta
-com o serviço. Este aplicativo não implementa esse caminho nem o áudio.
+com o serviço. Este aplicativo não implementa esse caminho de vídeo virtual. O áudio usa o
+encaminhamento separado descrito abaixo.
 
 A saída 1080p pode exceder a área útil de uma tela 1080p por causa das bordas.
 Ela só aparece por ação explícita. Não é janela sempre no topo nem é trazida
@@ -94,6 +96,69 @@ para frente a cada frame. Se ambos os visores estiverem ocultos/minimizados, a
 renderização pausa até algum deles voltar; a sessão de captura continua ativa.
 A saída conserva as dimensões ao mudar de monitor/DPI; isso requer teste manual
 em monitores com escalas diferentes.
+
+## Som em outros serviços
+
+O botão **Áudio...** abre uma janela de configuração sem aumentar a janela
+principal. O som fica **desligado por padrão**.
+
+1. Disponibilize um dispositivo virtual de áudio no Windows, se ainda não tiver
+   um. O HDR Bridge não instala drivers e não cria um microfone virtual próprio.
+   Um exemplo de dispositivo externo é o [VB-CABLE](https://vb-audio.com/Cable/).
+2. Em **Origem de áudio**, escolha **Aplicativo da janela capturada** ou
+   **Sistema**. A primeira opção inclui os processos filhos do aplicativo e exige
+   capturar uma janela. A segunda inclui outros aplicativos, notificações e
+   chamadas, excluindo o processo do HDR Bridge para evitar realimentar sua saída.
+3. Em **Destino**, escolha a ponta de reprodução do cabo virtual. Exemplo:
+   `CABLE Input`. A lista contém dispositivos ativos do Windows; não há seleção
+   automática. Não escolha seus alto-falantes/fones: isso pode duplicar o som local.
+4. Clique em **Aplicar áudio**, inicie a captura de vídeo e veja o indicador de
+   nível. Você pode ajustar o volume ou reaplicar durante a captura.
+5. No Discord ou outro serviço, escolha a ponta de gravação correspondente como
+   entrada de áudio. Exemplo: `CABLE Output`. O serviço precisa permitir selecionar
+   esse dispositivo e ter permissão para capturar áudio.
+6. **Parar**, fechar a origem ou sair do HDR Bridge encerra também o áudio.
+   Fechar só a janela de saída de vídeo não encerra a captura de áudio. Selecionar
+   **Desligado** e aplicar desliga apenas o áudio.
+
+Isso é roteamento de áudio, não a inclusão automática do som no compartilhamento
+de janela do serviço. Se o serviço tratar a entrada como microfone, o som pode
+ser enviado enquanto você estiver na chamada, independentemente do compartilhamento
+de vídeo. Supressão de ruído, ganho automático e cancelamento de eco do serviço
+podem alterar música/jogos; ajuste conforme os controles disponíveis nele.
+O aplicativo não mistura seu microfone real com o cabo. Para enviar ambos por uma
+única entrada, é necessário um mixer externo ou suporte do próprio serviço.
+
+O worker usa WASAPI process-loopback no Windows 11, PCM estéreo 48 kHz/16 bits e
+renderização compartilhada com conversão do Windows para o destino. A fila é
+limitada a 250 ms e descarta áudio antigo em sobrecarga; underruns geram silêncio.
+Nenhuma reprodução adicional é enviada automaticamente aos seus fones. A fonte
+original continua tocando normalmente. Um erro de áudio não interrompe o vídeo;
+o status mostra o código e permite reaplicar após reconectar o dispositivo.
+Não há ressincronização A/V adaptativa ou mistura de fontes nesta versão.
+
+## Tela branca em outro app de transmissão
+
+O HDR Bridge pode fornecer uma janela para outros serviços, mas cada um precisa
+conseguir capturá-la. Não há integração específica com todos os serviços.
+
+- Selecione **HDR Bridge - Saida SDR**, aberta pelo botão de saída. A janela
+  principal e a miniatura são deliberadamente excluídas de capturas.
+- Mantenha a saída aberta, sem minimizar, e comece pelo modo SDR.
+- Se a saída normal não for capturada, escolha **SDR — compatibilidade GDI** e
+  selecione a janela **HDR Bridge - Saida SDR - Compatibilidade** no serviço.
+  Esse modo copia o quadro já corrigido para uma imagem BGRA8 desenhada com GDI,
+  oferecendo uma alternativa a capturadores que não leem a apresentação Direct3D.
+- O modo GDI é somente SDR e faz leitura GPU→CPU. Ele pode custar mais CPU,
+  banda de memória e latência; teste primeiro em 720p/30 fps. O modo GPU normal
+  continua sendo o padrão. A compatibilidade GDI não garante funcionamento em
+  todos os capturadores, nem recupera conteúdo protegido.
+
+A causa de um caso específico de tela branca só pode ser confirmada examinando
+o capturador, a janela selecionada e o resultado na máquina. Para diagnóstico,
+anexe o código/ZIP do outro app, o arquivo de dependências, os passos de
+reprodução e indique se a prévia local e a janela de saída mostram a imagem.
+Não são necessários senhas, tokens, arquivos de contas ou `node_modules`.
 
 ## HDR e SDR
 
@@ -112,7 +177,8 @@ do serviço; não há garantia de que ele não aplique outra conversão de cor.
 
 ## Limitações atuais
 
-- Sem áudio, câmera virtual ou integração com o encoder do Discord.
+- Áudio entre serviços depende de um dispositivo de roteamento externo e da
+  seleção da entrada no serviço. Sem câmera virtual ou integração com o encoder do Discord.
 - Capturar monitor inteiro na mesma tela da janela de saída cria espelho. Mova a
   saída para outro monitor, ou prefira capturar a janela de um aplicativo.
 - A saída permanece capturável; só os controles usam exclusão de captura.
@@ -125,7 +191,8 @@ do serviço; não há garantia de que ele não aplique outra conversão de cor.
   medição do monitor. Sem leitura automática de referência SDR, metadados HDR10,
   calibração ICC ou gamut mapping perceptual completo.
 - Arquitetura projetada para baixo custo: cópia de textura GPU e passe de shader,
-  sem leitura de frames para CPU no app. Desempenho ainda precisa de benchmark.
+  sem leitura de frames para CPU no modo GPU normal. O modo GDI usa leitura
+  explícita para compatibilidade. Desempenho ainda precisa de benchmark.
 
 ## Branches e testes
 
@@ -137,6 +204,12 @@ do serviço; não há garantia de que ele não aplique outra conversão de cor.
 com quadros 720p/1080p em SDR/HDR e miniaturas de dois tamanhos. Verifica que os
 pixels e dimensões do quadro completo não mudam, que a prévia não aplica tone
 mapping novamente e que o conteúdo pode ser apagado.
+
+`AudioBufferTests` testa fila estéreo, saturação de ganho, silêncio, underrun,
+descarte de atrasos e limpeza. Esses testes não validam um dispositivo físico ou
+virtual de áudio. A escuta remota e o comportamento WASAPI ainda exigem teste
+manual em um PC Windows com os dispositivos de destino. O teste de prévia também
+verifica os pixels da leitura GDI e rejeita interpretar HDR como SDR.
 
 `ColorPipelineTests` executa o HLSL de produção no Direct3D WARP e testa a faixa
 SDR, neutralidade, altas luzes, exposição e preservação HDR. `StreamSettingsTests`
@@ -157,3 +230,6 @@ Testes automatizados não substituem captura real nem inspeção da imagem remot
 - [Microsoft: Advanced Color e scRGB](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range)
 - [Microsoft: captura de monitor](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createformonitor)
 - [Microsoft: captura de janela](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)
+
+- [Microsoft: Application Loopback](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync)
+- [Microsoft: exclusão de captura de janelas](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity)

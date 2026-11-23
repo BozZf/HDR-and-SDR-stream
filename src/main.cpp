@@ -21,6 +21,8 @@
 #include <chrono>
 #include "stream_settings.h"
 #include "video_frame.h"
+#include "audio_bridge.h"
+#include "sdr_readback.h"
 #include "shader_source.h"
 
 using namespace winrt;
@@ -30,7 +32,9 @@ using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
-              kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112;
+              kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
+              kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
+              kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118;
 
 com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     com_ptr<ID3DBlob> blob, errors;
@@ -46,7 +50,117 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
 struct App {
     HWND controls{}, output{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
-    bool hdr = false, running = false;
+    bool hdr = false, running = false, gdiOutput = false;
+    HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
+    bridge::AudioBridge audio;
+    bridge::AudioSource audioSource=bridge::AudioSource::Off;
+    std::vector<bridge::AudioDestination> audioDestinations;
+    std::wstring audioDestination,audioConfigError;
+    DWORD activeProcess=0;
+    bridge::SdrReadback compatibility;
+    void RefreshAudioDestinations() {
+        std::wstring previous=audioDestination;
+        auto selection=SendMessageW(audioDestinationBox,CB_GETCURSEL,0,0);
+        if (selection>0 && static_cast<size_t>(selection)<=audioDestinations.size())
+            previous=audioDestinations[static_cast<size_t>(selection)-1].id;
+        audioDestinations=bridge::AudioBridge::Destinations();
+        SendMessageW(audioDestinationBox,CB_RESETCONTENT,0,0);
+        SendMessageW(audioDestinationBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Selecione um destino virtual (nenhum por padrão)"));
+        size_t selected=0;
+        for (size_t i=0;i<audioDestinations.size();++i) {
+            SendMessageW(audioDestinationBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(audioDestinations[i].name.c_str()));
+            if (audioDestinations[i].id==previous) selected=i+1;
+        }
+        SendMessageW(audioDestinationBox,CB_SETCURSEL,selected,0);
+    }
+    void RestartAudio() {
+        audio.Stop(); audioConfigError.clear();
+        if (!running || audioSource==bridge::AudioSource::Off) { RefreshAudioStatus(); return; }
+        if (audioDestination.empty()) audioConfigError=L"Selecione o destino virtual em Áudio.";
+        else if (audioSource==bridge::AudioSource::Application && !activeProcess)
+            audioConfigError=L"Áudio do aplicativo exige capturar uma janela.";
+        if (audioConfigError.empty()) {
+            try { audio.Start(audioSource,activeProcess,audioDestination); }
+            catch (hresult_error const& e) { audioConfigError=e.message().c_str(); }
+        }
+        RefreshAudioStatus();
+    }
+    void RefreshAudioStatus() {
+        std::wstring text;
+        if (!audioConfigError.empty()) text=L"Áudio: "+audioConfigError;
+        else switch(audio.State()) {
+        case bridge::AudioState::Stopped: text=audioSource==bridge::AudioSource::Off ? L"Áudio desligado" : L"Áudio configurado; inicie a captura."; break;
+        case bridge::AudioState::Starting: text=L"Áudio: iniciando captura e destino..."; break;
+        case bridge::AudioState::Running: text=L"Áudio: nível "+std::to_wstring(static_cast<int>(audio.Peak()*100))+L"% · destino ativo"; break;
+        case bridge::AudioState::Failed: {
+            wchar_t code[32]; swprintf_s(code,L"0x%08X",static_cast<unsigned>(audio.Error()));
+            text=L"Áudio falhou ("+std::wstring(code)+L"). Reabra Áudio e aplique novamente."; break;
+        }
+        }
+        if (audioSummary) SetWindowTextW(audioSummary,text.c_str());
+        if (audioStatus) SetWindowTextW(audioStatus,text.c_str());
+    }
+    void ApplyAudio() {
+        auto selection=SendMessageW(audioModeBox,CB_GETCURSEL,0,0);
+        auto destination=SendMessageW(audioDestinationBox,CB_GETCURSEL,0,0);
+        auto next=selection==1 ? bridge::AudioSource::Application : selection==2 ? bridge::AudioSource::System : bridge::AudioSource::Off;
+        if (next!=bridge::AudioSource::Off && (destination<=0 || static_cast<size_t>(destination)>audioDestinations.size())) {
+            MessageBoxW(audioWindow,L"Escolha um dispositivo de reprodução virtual como destino. No serviço, selecione a entrada correspondente. Nenhum dispositivo é instalado pelo app.",L"Destino do áudio",MB_ICONINFORMATION);
+            return;
+        }
+        audioSource=next;
+        audioDestination=destination>0 && static_cast<size_t>(destination)<=audioDestinations.size()
+            ? audioDestinations[static_cast<size_t>(destination)-1].id : L"";
+        audio.Gain(static_cast<float>(SendMessageW(audioGainSlider,TBM_GETPOS,0,0))/100);
+        RestartAudio();
+    }
+    void AudioGain() {
+        auto value=SendMessageW(audioGainSlider,TBM_GETPOS,0,0);
+        audio.Gain(static_cast<float>(value)/100);
+        auto label=L"Volume: "+std::to_wstring(value)+L"%";
+        SetWindowTextW(audioGainLabel,label.c_str());
+    }
+    void OpenAudio() {
+        if (!audioWindow) {
+            audioWindow=CreateWindowW(L"HdrBridgeWindow",L"HDR Bridge — Áudio",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+                CW_USEDEFAULT,CW_USEDEFAULT,560,470,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
+            if (!audioWindow) throw_last_error();
+            SetWindowDisplayAffinity(audioWindow,WDA_EXCLUDEFROMCAPTURE);
+            Child(L"STATIC",L"Origem de áudio",0,20,20,150,22,0,audioWindow);
+            audioModeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,20,48,500,130,kAudioMode,audioWindow);
+            SendMessageW(audioModeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Desligado"));
+            SendMessageW(audioModeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Aplicativo da janela capturada (inclui filhos)"));
+            SendMessageW(audioModeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Sistema (exceto o próprio HDR Bridge)"));
+            SendMessageW(audioModeBox,CB_SETCURSEL,0,0);
+            Child(L"STATIC",L"Destino: saída de reprodução do seu cabo virtual",0,20,94,500,22,0,audioWindow);
+            audioDestinationBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL,20,120,500,180,kAudioDestination,audioWindow);
+            audioGainLabel=Child(L"STATIC",L"Volume: 100%",0,20,166,150,22,0,audioWindow);
+            audioGainSlider=Child(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,180,158,340,34,kAudioGain,audioWindow);
+            SendMessageW(audioGainSlider,TBM_SETRANGE,TRUE,MAKELPARAM(0,200));
+            SendMessageW(audioGainSlider,TBM_SETPOS,TRUE,100);
+            Child(L"STATIC",L"No serviço, escolha a entrada de gravação correspondente ao cabo.\r\nNão escolha seus alto-falantes como destino: pode duplicar o som.\r\nSistema inclui notificações e chamadas; prefira só o aplicativo.",0,20,206,500,62,0,audioWindow);
+            audioStatus=Child(L"STATIC",L"Áudio desligado",0,20,280,500,60,0,audioWindow);
+            Child(L"BUTTON",L"Atualizar dispositivos",WS_TABSTOP,20,360,230,32,kAudioRefresh,audioWindow);
+            Child(L"BUTTON",L"Aplicar áudio",WS_TABSTOP,280,360,240,32,kAudioApply,audioWindow);
+            RefreshAudioDestinations();
+        }
+        RefreshAudioStatus(); ShowWindow(audioWindow,SW_SHOW); SetForegroundWindow(audioWindow);
+    }
+    void PaintOutput() {
+        PAINTSTRUCT paint{}; HDC dc=BeginPaint(output,&paint);
+        RECT client{}; GetClientRect(output,&client);
+        FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        if (!compatibility.Pixels().empty()) {
+            BITMAPINFO bitmap{};
+            bitmap.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+            bitmap.bmiHeader.biWidth=static_cast<LONG>(compatibility.Width());
+            bitmap.bmiHeader.biHeight=-static_cast<LONG>(compatibility.Height());
+            bitmap.bmiHeader.biPlanes=1; bitmap.bmiHeader.biBitCount=32; bitmap.bmiHeader.biCompression=BI_RGB;
+            StretchDIBits(dc,0,0,client.right,client.bottom,0,0,compatibility.Width(),compatibility.Height(),
+                compatibility.Pixels().data(),&bitmap,DIB_RGB_COLORS,SRCCOPY);
+        }
+        EndPaint(output,&paint);
+    }
     struct Source { HMONITOR monitor{}; HWND window{}; DWORD process{}; std::wstring label; };
     std::vector<Source> sources;
     bridge::Resolution resolution = bridge::Resolution::P720;
@@ -62,6 +176,7 @@ struct App {
         if (!SetWaitableTimer(frameTimer, &due, 0, nullptr, nullptr, FALSE)) throw_last_error();
     }
     void OnFrameTimer() {
+        RefreshAudioStatus();
         Tick();
         if (running) { schedule.Advance(Now()); ArmTimer(); }
     }
@@ -183,7 +298,7 @@ struct App {
         context->OMSetRenderTargets(0, nullptr, nullptr);
         target = nullptr; swap = nullptr;
         previewTarget = nullptr; previewSwap = nullptr;
-        programFrame.Reset();
+        programFrame.Reset(); compatibility.Clear();
         context->ClearState(); context->Flush();
         outputWidth = outputHeight = previewWidth = previewHeight = 0;
     }
@@ -218,6 +333,9 @@ struct App {
         outputWidth = width; outputHeight = height;
     }
     void Stop() {
+        audio.Stop(); audioConfigError.clear(); activeProcess=0;
+        RefreshAudioStatus();
+        compatibility.Clear();
         if (frameTimer) CancelWaitableTimer(frameTimer);
         running = false; ++generation;
         if (item) { item.Closed(closedToken); item = nullptr; }
@@ -275,6 +393,8 @@ struct App {
         // window is opt-in and never silently reopened after a source change.
         session.StartCapture();
         running=true;
+        activeProcess=source.process;
+        RestartAudio();
         EnableWindow(GetDlgItem(controls,kShow),TRUE);
         ArmTimer(true);
         UpdateStatus();
@@ -283,13 +403,13 @@ struct App {
         if (!running) return;
         std::wstring text = L"Origem: "; text += item.DisplayName().c_str();
         text += hdr ? L"\r\nHDR scRGB local. A transmissão depende do serviço."
-                    : L"\r\nSDR com tone mapping.";
+                    : gdiOutput ? L"\r\nSDR compatível (GDI; maior uso de CPU)." : L"\r\nSDR com tone mapping.";
         text += IsWindowVisible(output) ? L"\r\nSaída para Discord aberta." : L"\r\nPrévia interna; saída para Discord fechada.";
         auto extent=bridge::OutputExtent(resolution);
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
         Status(text);
-        SetWindowTextW(output, hdr ? L"HDR Bridge - Saida HDR local" : L"HDR Bridge - Saida SDR");
+        SetWindowTextW(output,hdr ? L"HDR Bridge - Saida HDR local" : gdiOutput ? L"HDR Bridge - Saida SDR - Compatibilidade" : L"HDR Bridge - Saida SDR");
     }
     void Tick() {
         if (!running) return;
@@ -347,14 +467,19 @@ struct App {
             }
         }
         if (showOutput) {
-            EnsureSurface(output,extent.width,extent.height,swap,target,outputWidth,outputHeight);
-            programFrame.Blit(context.get(),target.get(),extent,vs.get(),displayShader.get(),sampler.get());
-            check_hresult(swap->Present(0,0));
+            if (gdiOutput) {
+                compatibility.Update(device.get(),context.get(),programFrame.Texture());
+                InvalidateRect(output,nullptr,FALSE); UpdateWindow(output);
+            } else {
+                EnsureSurface(output,extent.width,extent.height,swap,target,outputWidth,outputHeight);
+                programFrame.Blit(context.get(),target.get(),extent,vs.get(),displayShader.get(),sampler.get());
+                check_hresult(swap->Present(0,0));
+            }
         }
     }
-    HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0) {
+    HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0, HWND parent = nullptr) {
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
-            controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+            parent ? parent : controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
         if (!child) throw_last_error();
         SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
         return child;
@@ -383,6 +508,7 @@ struct App {
         modeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,190,530,130,kMode);
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — tone mapping para compartilhar"));
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"HDR — preservar scRGB (saída local)"));
+        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — compatibilidade GDI para outros apps"));
         SendMessageW(modeBox,CB_SETCURSEL,0,0);
         exposureLabel=Child(L"STATIC",L"Exposição: 0.0 EV",0,20,244,190,22);
         exposureSlider=Child(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,225,236,465,34,kExposure);
@@ -394,12 +520,14 @@ struct App {
         SendMessageW(whiteSlider,TBM_SETPOS,TRUE,203);
         Child(L"BUTTON",L"Iniciar / trocar origem",WS_TABSTOP,20,332,230,32,kPick);
         Child(L"BUTTON",L"Parar",WS_TABSTOP,270,332,120,32,kStop);
+        Child(L"BUTTON",L"Áudio...",WS_TABSTOP,450,332,240,32,kAudio);
         Child(L"STATIC",L"Prévia · resolução de processamento independente",0,20,374,330,22);
         preview=CreateWindowExW(0,L"HdrBridgePreview",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
             20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
         status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"A prévia é pequena; o quadro continua em 720p/1080p.\r\nPara compartilhar em resolução cheia, abra a saída para Discord.\r\nSem áudio nesta versão.",0,360,488,330,90);
+        Child(L"STATIC",L"Compartilhe a saída, não a prévia.\r\nTela branca em outro app? Teste SDR compatibilidade GDI.\r\nConfigure som no botão Áudio.",0,360,488,330,70);
+        audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
         Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
         Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
         Child(L"BUTTON",L"Sair",WS_TABSTOP,570,600,120,32,kExit);
@@ -415,6 +543,9 @@ struct App {
         Shell_NotifyIconW(NIM_ADD, &icon);
     }
     void Command(int id, int event) {
+        if (id == kAudio) OpenAudio();
+        if (id == kAudioRefresh) RefreshAudioDestinations();
+        if (id == kAudioApply) ApplyAudio();
         if (id == kPick) StartSelected();
         if (id == kRefresh || (id == kSourceKind && event == CBN_SELCHANGE)) RefreshSources();
         if (id == kStop) Stop();
@@ -428,7 +559,8 @@ struct App {
         if (id == kHideOutput) CloseOutput();
         if (id == kExit) { Stop(); DestroyWindow(controls); }
         if (id == kMode && event == CBN_SELCHANGE) {
-            hdr = SendMessageW(modeBox, CB_GETCURSEL,0,0) == 1;
+            auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
+            hdr=selected==1; gdiOutput=selected==2;
             EnableWindow(exposureSlider,!hdr); EnableWindow(whiteSlider,!hdr);
             ReleaseSwap(); UpdateStatus();
         }
@@ -443,6 +575,7 @@ struct App {
         }
     }
     void CloseOutput() {
+        compatibility.Clear();
         if (target) {
             float black[4]={0,0,0,1}; context->ClearRenderTargetView(target.get(),black); swap->Present(0,0);
         }
@@ -480,7 +613,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 PostQuitMessage(0); return 0;
             }
             }
+        } else if (hwnd == app.audioWindow) {
+            if (message==WM_COMMAND) { app.Command(LOWORD(wparam),HIWORD(wparam)); return 0; }
+            if (message==WM_HSCROLL) { app.AudioGain(); return 0; }
+            if (message==WM_CLOSE) { ShowWindow(hwnd,SW_HIDE); return 0; }
         } else if (hwnd == app.output) {
+            if (message==WM_PAINT && app.gdiOutput) { app.PaintOutput(); return 0; }
+            if (message==WM_ERASEBKGND && app.gdiOutput) return 1;
             if (message == WM_CLOSE) { app.CloseOutput(); return 0; }
             if (message == WM_DPICHANGED) {
                 auto suggested=reinterpret_cast<RECT*>(lparam);
@@ -529,7 +668,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             MSG message{};
             while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
                 if (message.message==WM_QUIT) { quitting=true; break; }
-                if (!IsDialogMessageW(app.controls,&message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+                bool audioMessage=app.audioWindow && IsDialogMessageW(app.audioWindow,&message);
+                if (!audioMessage && !IsDialogMessageW(app.controls,&message)) { TranslateMessage(&message); DispatchMessageW(&message); }
             }
         }
         app.Stop();

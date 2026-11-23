@@ -1,0 +1,68 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  background: #1e2025;
+  color: #eff0f3;
+  font-size: 14px;
+  --panel: #272a31;
+  --control: #31343d;
+  --highlight: #444955;
+  --border: #3b3e47;
+  --muted: #b9bdc8;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; padding: 24px; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 23px; font-weight: 650; letter-spacing: -.025em; }
+h2 { font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
+.top, .identity, .section-heading, .audio-line { display: flex; align-items: center; gap: 12px; }
+.top, .section-heading, .audio-line { justify-content: space-between; }
+.top { margin-bottom: 21px; }
+.identity p, .hint { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.mark { border: 1px solid #515563; border-radius: 12px; color: #cbd1e2; background: #343842; width: 45px; height: 45px; display: grid; place-items: center; flex: 0 0 auto; }
+.mark svg { width: 24px; height: 24px; }
+main { display: grid; grid-template-columns: minmax(295px, 1fr) minmax(300px, 1.08fr); align-items: start; gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 13px; padding: 17px; min-width: 0; }
+.section-heading { min-height: 32px; margin-bottom: 12px; }
+.fields { display: grid; gap: 11px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+label { display: grid; gap: 5px; color: #d5d8df; font-size: 12px; min-width: 0; }
+button, select, input { font: inherit; }
+button, select { color: #eff0f3; background: var(--control); border: 1px solid var(--border); border-radius: 7px; min-height: 33px; }
+button { padding: 0 10px; cursor: pointer; font-size: 12px; font-weight: 600; }
+button:hover:not(:disabled) { background: #484d5a; border-color: #626875; }
+button:disabled { opacity: .46; cursor: default; }
+button.primary { background: var(--highlight); border-color: #5a6171; }
+button.quiet { background: transparent; color: var(--muted); }
+select { width: 100%; padding: 0 24px 0 9px; text-overflow: ellipsis; }
+button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid #adbbdb; outline-offset: 2px; }
+.notice { border: 1px solid #665740; background: #383128; color: #ecdbbd; padding: 8px 10px; border-radius: 7px; font-size: 12px; line-height: 1.45; }
+details { margin-top: 13px; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.slider { margin-top: 9px; }
+.slider span { display: flex; justify-content: space-between; }
+.slider output { color: #e4e8f1; }
+input[type='range'], input[type='checkbox'] { accent-color: #afbad1; }
+input[type='range'] { width: 100%; margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 15px; }
+.preview { aspect-ratio: 16 / 9; background: #17191e; border: 1px solid #40444e; border-radius: 8px; position: relative; display: grid; place-items: center; color: #9299a9; font-size: 12px; }
+.state { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.state.active { color: #b8d8c8; }
+.state.active::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #a3c8b6; vertical-align: 1px; }
+.status { color: var(--muted); min-height: 42px; margin-top: 12px; white-space: pre-line; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+.audio-line { margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--border); }
+.audio-line p { color: var(--muted); overflow-wrap: anywhere; font-size: 12px; }
+.audio-line button { flex-shrink: 0; }
+.panel-footer { margin-top: 10px; display: flex; justify-content: flex-end; }
+dialog { width: min(436px, calc(100% - 38px)); background: #2a2d34; color: #eff0f3; border: 1px solid #575b67; border-radius: 13px; padding: 20px; box-shadow: 0 14px 50px #111318b0; }
+dialog::backdrop { background: #101216b0; }
+dialog h2 { margin-bottom: 9px; }
+dialog p { color: #cdd0d8; line-height: 1.5; }
+dialog .notice, dialog .hint { margin-top: 9px; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.modal-actions { justify-content: flex-end; }
+@media (max-width: 675px) {
+  body { padding: 16px; }
+  main { grid-template-columns: 1fr; }
+}

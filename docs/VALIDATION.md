@@ -25,6 +25,15 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 
 ## Novos controles
 
+- Clicar no X da janela principal durante uma captura e cancelar. A sessão
+  deve continuar. Testar Minimizar e Sair com e sem salvar, inclusive após
+  fechar e reabrir o app. Restaurar a confirmação em Perguntar ao fechar.
+- Confirmar que o X da janela de saída fecha só a saída, sem mostrar a caixa
+  de confirmação do app.
+- Verificar a interface em escalas de 100% e 150%, incluindo prévia, teclado,
+  lista de fontes, modal do áudio e aviso GDI. A prévia deve ceder espaço às
+  caixas de diálogo. Verificar o caminho Win32 com WebView2 indisponível.
+
 - Iniciar captura: só a prévia de 320×180 abre dentro da janela principal; nenhuma
   saída grande é exibida automaticamente.
 - Abrir/fechar saída para Discord: mesma imagem processada, sem mudança de origem

@@ -24,4 +24,6 @@ if (-not (Test-Path -LiteralPath (Join-Path $driver 'VBCABLE_Setup_x64.exe') -Pa
 }
 
 Copy-Item -LiteralPath $exe -Destination $package
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination $package
+Copy-Item -LiteralPath (Join-Path $build 'WebView2-LICENSE.txt') -Destination $package
 Copy-Item -LiteralPath (Join-Path $root 'docs/AUDIO-SETUP.txt') -Destination $package

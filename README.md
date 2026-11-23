@@ -2,8 +2,10 @@
 
 Aplicativo nativo para Windows 11 que captura uma janela ou monitor em FP16 HDR e
 oferece saída SDR com tone mapping na GPU ou HDR scRGB local, mantendo o HDR do
-monitor ligado. Sem Electron, servidor ou navegador embutido. A versão 0.3 inclui áudio roteável e uma prévia pequena
-dentro da janela principal, sem abrir automaticamente uma janela gigante.
+monitor ligado. A versão 1.0 tem interface escura com HTML/CSS/JavaScript,
+prévia nativa dentro da janela principal e roteamento de áudio. A interface
+vem embutida no executável e usa o WebView2 do Windows 11. Em máquinas sem
+esse runtime, a interface Win32 abre automaticamente.
 
 ## Configuração da captura
 
@@ -32,6 +34,7 @@ limites desse serviço. O app não altera o cliente Discord.
 
 Requisitos: Windows 11, driver Direct3D 11, Visual Studio 2022 com
 **Desenvolvimento para desktop com C++**, Windows SDK 10.0.22621+ e CMake.
+Na primeira compilação, o CMake baixa o SDK WebView2 e verifica seu SHA-256.
 No Developer PowerShell do Visual Studio:
 
 ```powershell
@@ -72,6 +75,12 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
    trazê-la à frente.
 7. **Fechar saída** ou **Esc** com a saída em foco fecha a janela e mantém a
    prévia. **Parar** encerra a captura. **Sair** encerra o app.
+
+O **X da janela principal** pergunta se você quer minimizar para a bandeja ou
+sair. Se marcar **Salvar minha escolha**, o X repete a ação nas próximas vezes.
+Clique em **Perguntar ao fechar** para restaurar a confirmação. O botão
+**Sair do Bridge** encerra o app e a captura mesmo se o X estiver configurado
+para minimizar.
 
 ## Prévia pequena e resolução de transmissão
 

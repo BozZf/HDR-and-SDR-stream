@@ -20,23 +20,62 @@
 #include <cwchar>
 #include <vector>
 #include <chrono>
+#include <charconv>
+#include <span>
 #include "stream_settings.h"
 #include "video_frame.h"
 #include "audio_bridge.h"
 #include "sdr_readback.h"
 #include "shader_source.h"
+#include "web_ui.h"
+
+#pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 using namespace winrt;
 using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
-constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2;
+constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2, kWebCommand = WM_APP + 3;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
               kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
               kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118, kLowerOutput = 119,
-              kLowerToolbar = 120;
+              kLowerToolbar = 120, kResetClose = 121;
+
+enum class CloseChoice : DWORD { Ask, Minimize, Exit };
+constexpr wchar_t kSettingsKey[]=L"Software\\HDR Bridge";
+
+CloseChoice ReadCloseChoice() {
+    DWORD value=0,size=sizeof(value);
+    if (RegGetValueW(HKEY_CURRENT_USER,kSettingsKey,L"CloseChoice",RRF_RT_REG_DWORD,nullptr,&value,&size)==ERROR_SUCCESS &&
+        value<=static_cast<DWORD>(CloseChoice::Exit)) return static_cast<CloseChoice>(value);
+    return CloseChoice::Ask;
+}
+
+bool SaveCloseChoice(CloseChoice choice) {
+    HKEY key{};
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,kSettingsKey,0,nullptr,0,KEY_SET_VALUE,nullptr,&key,nullptr)!=ERROR_SUCCESS)
+        return false;
+    DWORD value=static_cast<DWORD>(choice);
+    auto result=RegSetValueExW(key,L"CloseChoice",0,REG_DWORD,reinterpret_cast<BYTE const*>(&value),sizeof(value));
+    RegCloseKey(key);
+    return result==ERROR_SUCCESS;
+}
+
+bool ParseValues(std::string_view input,std::span<int> values) {
+    for (auto& value : values) {
+        if (input.empty()) return false;
+        auto end=input.data()+input.size();
+        auto result=std::from_chars(input.data(),end,value);
+        if (result.ec!=std::errc{}) return false;
+        bool last=&value==&values.back();
+        if (last) return result.ptr==end;
+        if (result.ptr==end || *result.ptr!=':') return false;
+        input.remove_prefix(static_cast<size_t>(result.ptr-input.data())+1);
+    }
+    return input.empty();
+}
 
 com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     com_ptr<ID3DBlob> blob, errors;
@@ -54,6 +93,12 @@ struct App {
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
     bool hdr = false, running = false, gdiOutput = false;
     bool outputLowered = false;
+    bridge::WebUi web;
+    HWND webHost{};
+    bool webActive=false;
+    std::wstring videoStatusText=L"Parado. Escolha a janela ou monitor de origem.", audioStatusText;
+    CloseChoice closeChoice=CloseChoice::Ask;
+    bool confirmingClose=false;
     HWND outputToolbarTitle{},outputToolbarLower{},outputToolbarClose{};
     HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
     bridge::AudioBridge audio;
@@ -102,8 +147,12 @@ struct App {
             text=L"Áudio falhou ("+std::wstring(code)+L"). Reabra Áudio e aplique novamente."; break;
         }
         }
-        if (audioSummary) SetWindowTextW(audioSummary,text.c_str());
-        if (audioStatus) SetWindowTextW(audioStatus,text.c_str());
+        if (audioStatusText!=text) {
+            audioStatusText=text;
+            if (audioSummary) SetWindowTextW(audioSummary,text.c_str());
+            if (audioStatus) SetWindowTextW(audioStatus,text.c_str());
+            if (webActive) SendText(L"audio-status",text);
+        }
     }
     void ApplyAudio() {
         auto selection=SendMessageW(audioModeBox,CB_GETCURSEL,0,0);
@@ -125,7 +174,7 @@ struct App {
         auto label=L"Volume: "+std::to_wstring(value)+L"%";
         SetWindowTextW(audioGainLabel,label.c_str());
     }
-    void OpenAudio() {
+    void OpenAudio(bool show=true) {
         if (!audioWindow) {
             audioWindow=CreateWindowW(L"HdrBridgeWindow",L"HDR Bridge — Áudio",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
                 CW_USEDEFAULT,CW_USEDEFAULT,560,470,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
@@ -149,7 +198,8 @@ struct App {
             Child(L"BUTTON",L"Aplicar áudio",WS_TABSTOP,280,360,240,32,kAudioApply,audioWindow);
             RefreshAudioDestinations();
         }
-        RefreshAudioStatus(); ShowWindow(audioWindow,SW_SHOW); SetForegroundWindow(audioWindow);
+        RefreshAudioStatus();
+        if (show) { ShowWindow(audioWindow,SW_SHOW); SetForegroundWindow(audioWindow); }
     }
     void DrawGdiOutput(HDC dc) {
         RECT client{}; GetClientRect(output,&client);
@@ -279,6 +329,7 @@ struct App {
         if (!sources.empty()) SendMessageW(sourceBox,CB_SETCURSEL,selection,0);
         EnableWindow(GetDlgItem(controls,kPick),!sources.empty());
         if (sources.empty() && !running) Status(L"Nenhuma origem disponível. Abra o aplicativo e clique em Atualizar.");
+        PublishWebState();
     }
     UINT generation = 0, fps = 30;
     float exposure = 0, white = 203;
@@ -303,7 +354,11 @@ struct App {
     winrt::Windows::Graphics::SizeInt32 poolSize{};
     event_token closedToken{};
 
-    void Status(std::wstring const& message) { SetWindowTextW(status, message.c_str()); }
+    void Status(std::wstring const& message) {
+        videoStatusText=message;
+        SetWindowTextW(status,message.c_str());
+        if (webActive) SendText(L"status",message);
+    }
     void Fail(hresult_error const& error) {
         Stop();
         Status(L"Falha. Se o dispositivo foi removido, reinicie o app.");
@@ -401,6 +456,7 @@ struct App {
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
         Status(L"Parado. Escolha a janela ou monitor de origem.");
+        PublishWebState();
     }
     void StartSelected() {
         auto selected=SendMessageW(sourceBox,CB_GETCURSEL,0,0);
@@ -460,11 +516,12 @@ struct App {
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
         Status(text);
+        PublishWebState();
         SetWindowTextW(output,hdr ? L"HDR Bridge - Saida HDR local" : gdiOutput ? L"HDR Bridge - Saida SDR - Compatibilidade" : L"HDR Bridge - Saida SDR");
     }
     void Tick() {
         if (!running) return;
-        bool showPreview=IsWindowVisible(controls) && !IsIconic(controls);
+        bool showPreview=IsWindowVisible(preview) && !IsIconic(controls);
         bool showOutput=IsWindowVisible(output) && !IsIconic(output);
         if (!showPreview && !showOutput) return;
         ID3D11ShaderResourceView* none = nullptr;
@@ -536,7 +593,9 @@ struct App {
         return child;
     }
     void InitUI() {
+        closeChoice=ReadCloseChoice();
         Child(L"STATIC",L"HDR Bridge  /  configurar captura",0,20,18,690,24);
+        Child(L"BUTTON",L"Perguntar ao fechar",WS_TABSTOP,510,16,180,27,kResetClose);
         Child(L"STATIC",L"Transmitir",0,20,58,130,22);
         sourceKindBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,52,270,120,kSourceKind);
         SendMessageW(sourceKindBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Monitor"));
@@ -559,7 +618,7 @@ struct App {
         modeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,190,530,130,kMode);
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — tone mapping para compartilhar"));
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"HDR — preservar scRGB (saída local)"));
-        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — compatibilidade GDI para outros apps"));
+        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — compatibilidade GDI (maior uso de CPU)"));
         SendMessageW(modeBox,CB_SETCURSEL,0,0);
         exposureLabel=Child(L"STATIC",L"Exposição: 0.0 EV",0,20,244,190,22);
         exposureSlider=Child(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,225,236,465,34,kExposure);
@@ -605,7 +664,198 @@ struct App {
         wcscpy_s(icon.szTip,L"HDR Bridge — clique para abrir controles");
         Shell_NotifyIconW(NIM_ADD, &icon);
     }
+    void SendText(std::wstring_view type,std::wstring_view value) {
+        web.Send(L"{\"type\":"+bridge::JsonString(type)+L",\"text\":"+bridge::JsonString(value)+L"}");
+    }
+    void PublishWebState() {
+        if (!webActive) return;
+        std::wstring message=L"{\"type\":\"state\",\"sources\":[";
+        for (size_t i=0;i<sources.size();++i) {
+            if (i) message+=L',';
+            message+=bridge::JsonString(sources[i].label);
+        }
+        message+=L']';
+        auto selection=[&](std::wstring_view name,HWND control,UINT read=CB_GETCURSEL) {
+            message+=L",\""+std::wstring(name)+L"\":"+std::to_wstring(SendMessageW(control,read,0,0));
+        };
+        selection(L"source-kind",sourceKindBox);
+        selection(L"source",sourceBox);
+        selection(L"resolution",resolutionBox);
+        selection(L"rate",rateBox);
+        selection(L"mode",modeBox);
+        selection(L"exposure",exposureSlider,TBM_GETPOS);
+        selection(L"white",whiteSlider,TBM_GETPOS);
+        message+=running ? L",\"running\":true" : L",\"running\":false";
+        message+=IsWindowVisible(output) ? L",\"output\":true}" : L",\"output\":false}";
+        web.Send(message);
+    }
+    void PublishAudioSettings() {
+        std::wstring message=L"{\"type\":\"audio-settings\",\"destinations\":[\"Não selecionado\"";
+        int selected=0;
+        for (size_t i=0;i<audioDestinations.size();++i) {
+            message+=L','+bridge::JsonString(audioDestinations[i].name);
+            if (audioDestinations[i].id==audioDestination) selected=static_cast<int>(i)+1;
+        }
+        message+=L"],\"destination\":"+std::to_wstring(selected)+L",\"mode\":"+std::to_wstring(static_cast<int>(audioSource))+
+            L",\"gain\":"+std::to_wstring(SendMessageW(audioGainSlider,TBM_GETPOS,0,0))+L'}';
+        web.Send(message);
+    }
+    void StartWebUi() {
+        webHost=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+            0,0,1,1,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if (!webHost) return;
+        ResizeWebUi();
+        web.Start(webHost,controls,kWebCommand);
+    }
+    void ResizeWebUi() {
+        if (!webHost) return;
+        RECT area{};
+        GetClientRect(controls,&area);
+        if (area.right>0 && area.bottom>0) {
+            SetWindowPos(webHost,HWND_BOTTOM,0,0,area.right,area.bottom,SWP_NOACTIVATE);
+            web.Resize();
+        }
+    }
+    void ActivateWebUi() {
+        if (webActive) return;
+        webActive=true;
+        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+            if (child!=webHost) ShowWindow(child,SW_HIDE);
+        }
+        auto style=GetWindowLongPtrW(controls,GWL_STYLE);
+        SetWindowLongPtrW(controls,GWL_STYLE,style|WS_THICKFRAME|WS_MAXIMIZEBOX);
+        auto dpi=GetDpiForWindow(controls);
+        MONITORINFO monitor{}; monitor.cbSize=sizeof(monitor);
+        auto width=MulDiv(930,static_cast<int>(dpi),96),height=MulDiv(615,static_cast<int>(dpi),96);
+        if (GetMonitorInfoW(MonitorFromWindow(controls,MONITOR_DEFAULTTONEAREST),&monitor)) {
+            width=std::min(width,static_cast<int>(monitor.rcWork.right-monitor.rcWork.left));
+            height=std::min(height,static_cast<int>(monitor.rcWork.bottom-monitor.rcWork.top));
+        }
+        SetWindowPos(controls,nullptr,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+        ResizeWebUi();
+        ShowWindow(webHost,SW_SHOWNA);
+        PublishWebState();
+        SendText(L"status",videoStatusText);
+        SendText(L"audio-status",audioStatusText.empty() ? L"Áudio desligado" : audioStatusText);
+    }
+    void ApplyPreviewLayout(std::span<int const,4> values) {
+        auto x=values[0],y=values[1],width=values[2],height=values[3];
+        RECT area{}; GetClientRect(controls,&area);
+        if (x<0 || y<0 || width<=0 || height<=0 || x>area.right || y>area.bottom ||
+            width>area.right-x || height>area.bottom-y) {
+            ShowWindow(preview,SW_HIDE);
+            return;
+        }
+        SetWindowPos(preview,HWND_TOP,x,y,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW);
+    }
+    void ResetCloseChoice() {
+        if (!SaveCloseChoice(CloseChoice::Ask)) {
+            MessageBoxW(controls,L"Não foi possível salvar a preferência.",L"HDR Bridge",MB_ICONWARNING);
+            return;
+        }
+        closeChoice=CloseChoice::Ask;
+        MessageBoxW(controls,L"O HDR Bridge voltará a perguntar ao fechar.",L"HDR Bridge",MB_OK|MB_ICONINFORMATION);
+    }
+    void FinishClose(CloseChoice choice,bool remember) {
+        confirmingClose=false;
+        if (choice==CloseChoice::Ask) return;
+        if (remember) {
+            if (SaveCloseChoice(choice)) closeChoice=choice;
+            else MessageBoxW(controls,L"Não foi possível salvar a preferência.",L"HDR Bridge",MB_ICONWARNING);
+        }
+        if (choice==CloseChoice::Minimize) ShowWindow(controls,SW_HIDE);
+        else Command(kExit,0);
+    }
+    void ConfirmClose() {
+        if (confirmingClose) return;
+        if (closeChoice!=CloseChoice::Ask) { FinishClose(closeChoice,false); return; }
+        confirmingClose=true;
+        if (webActive) {
+            ShowWindow(preview,SW_HIDE);
+            web.Send(L"{\"type\":\"confirm-close\"}");
+            return;
+        }
+        TASKDIALOG_BUTTON buttons[]={{kShow,L"Minimizar"},{kExit,L"Sair"}};
+        TASKDIALOGCONFIG dialog{};
+        dialog.cbSize=sizeof(dialog); dialog.hwndParent=controls;
+        dialog.dwFlags=TDF_POSITION_RELATIVE_TO_WINDOW|TDF_ALLOW_DIALOG_CANCELLATION;
+        dialog.dwCommonButtons=TDCBF_CANCEL_BUTTON;
+        dialog.pszWindowTitle=L"HDR Bridge";
+        dialog.pszMainInstruction=L"Minimizar ou sair?";
+        dialog.pszContent=L"Minimizar mantém a captura ativa na bandeja do Windows. Sair encerra a imagem e o áudio.";
+        dialog.pszVerificationText=L"Salvar minha escolha";
+        dialog.cButtons=2; dialog.pButtons=buttons; dialog.nDefaultButton=IDCANCEL;
+        int button=IDCANCEL; BOOL remember=FALSE;
+        TaskDialogIndirect(&dialog,&button,nullptr,&remember);
+        FinishClose(button==kShow ? CloseChoice::Minimize : button==kExit ? CloseChoice::Exit : CloseChoice::Ask,remember!=FALSE);
+    }
+    void WebCommand(std::wstring_view message) {
+        if (message==L"ready") { ActivateWebUi(); return; }
+        if (!webActive) return;
+        auto text=to_string(message);
+        std::string_view command=text;
+        auto delimiter=command.find(':');
+        auto action=command.substr(0,delimiter);
+        auto arguments=delimiter==std::string_view::npos ? std::string_view{} : command.substr(delimiter+1);
+        if (action=="layout") {
+            int values[4]{};
+            if (ParseValues(arguments,values)) ApplyPreviewLayout(values);
+            return;
+        }
+        if (action=="close-cancel") { confirmingClose=false; return; }
+        if (action=="close-minimize" || action=="close-exit") {
+            int value=0;
+            if (confirmingClose && ParseValues(arguments,{&value,1}) && (value==0 || value==1))
+                FinishClose(action=="close-minimize" ? CloseChoice::Minimize : CloseChoice::Exit,value==1);
+            return;
+        }
+        if (action=="audio-open" || action=="audio-refresh") {
+            OpenAudio(false);
+            if (action=="audio-refresh") RefreshAudioDestinations();
+            PublishAudioSettings();
+            return;
+        }
+        if (action=="audio-apply") {
+            int values[3]{};
+            if (audioWindow && ParseValues(arguments,values) && values[0]>=0 && values[0]<=2 &&
+                values[1]>=0 && static_cast<size_t>(values[1])<=audioDestinations.size() && values[2]>=0 && values[2]<=200) {
+                SendMessageW(audioModeBox,CB_SETCURSEL,values[0],0);
+                SendMessageW(audioDestinationBox,CB_SETCURSEL,values[1],0);
+                SendMessageW(audioGainSlider,TBM_SETPOS,TRUE,values[2]);
+                ApplyAudio();
+            }
+            return;
+        }
+        if (arguments.empty()) {
+            if (action=="start") Command(kPick,0);
+            else if (action=="stop") Command(kStop,0);
+            else if (action=="show") Command(kShow,0);
+            else if (action=="lower") Command(kLowerOutput,0);
+            else if (action=="hide") Command(kHideOutput,0);
+            else if (action=="refresh") Command(kRefresh,0);
+            else if (action=="reset-close") Command(kResetClose,0);
+            else if (action=="exit") Command(kExit,0);
+            return;
+        }
+        int value=0;
+        if (!ParseValues(arguments,{&value,1})) return;
+        if (action=="exposure" && value>=-20 && value<=20) {
+            SendMessageW(exposureSlider,TBM_SETPOS,TRUE,value); Sliders(); return;
+        }
+        if (action=="white" && value>=80 && value<=400) {
+            SendMessageW(whiteSlider,TBM_SETPOS,TRUE,value); Sliders(); return;
+        }
+        auto select=[&](HWND control,int id,int maxValue) {
+            if (value>=0 && value<=maxValue) { SendMessageW(control,CB_SETCURSEL,value,0); Command(id,CBN_SELCHANGE); }
+        };
+        if (action=="source-kind") select(sourceKindBox,kSourceKind,1);
+        else if (action=="source") select(sourceBox,kSource,static_cast<int>(sources.size())-1);
+        else if (action=="resolution") select(resolutionBox,kResolution,1);
+        else if (action=="rate") select(rateBox,kRate,1);
+        else if (action=="mode") select(modeBox,kMode,2);
+    }
     void Command(int id, int event) {
+        if (id == kResetClose) ResetCloseChoice();
         if (id == kAudio) OpenAudio();
         if (id == kAudioRefresh) RefreshAudioDestinations();
         if (id == kAudioApply) ApplyAudio();
@@ -626,7 +876,7 @@ struct App {
         }
         if (id == kHideOutput) CloseOutput();
         if ((id == kLowerOutput || id == kLowerToolbar) && running) LowerOutput();
-        if (id == kExit) { Stop(); DestroyWindow(controls); }
+        if (id == kExit) { Stop(); web.Close(); DestroyWindow(controls); return; }
         if (id == kMode && event == CBN_SELCHANGE) {
             auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
             hdr=selected==1; gdiOutput=selected==2;
@@ -690,8 +940,16 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             case WM_HSCROLL: app.Sliders(); return 0;
             case WM_DISPLAYCHANGE: if (app.sourceBox) app.RefreshSources(); return 0;
             case kClosed: if (wparam == app.generation) app.Stop(); return 0;
-            case WM_CLOSE: ShowWindow(hwnd,SW_HIDE); return 0;
-            case WM_SIZE: if (wparam == SIZE_MINIMIZED) ShowWindow(hwnd,SW_HIDE); return 0;
+            case WM_CLOSE: app.ConfirmClose(); return 0;
+            case WM_SIZE:
+                if (wparam==SIZE_MINIMIZED) ShowWindow(hwnd,SW_HIDE);
+                else app.ResizeWebUi();
+                return 0;
+            case kWebCommand: {
+                std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> command(reinterpret_cast<wchar_t*>(lparam),CoTaskMemFree);
+                if (command) app.WebCommand(command.get());
+                return 0;
+            }
             case kTray:
                 if (lparam == WM_LBUTTONUP || lparam == WM_RBUTTONUP) {
                     ShowWindow(hwnd,SW_RESTORE); SetForegroundWindow(hwnd);
@@ -780,6 +1038,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         if (!app.frameTimer) app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,0,TIMER_ALL_ACCESS);
         if (!app.frameTimer) throw_last_error();
         app.InitGraphics(); app.InitUI(); app.FitOutputWindow(); ShowWindow(app.controls,SW_SHOW);
+        app.StartWebUi();
         bool quitting=false;
         while (!quitting) {
             DWORD event=MsgWaitForMultipleObjectsEx(1,&app.frameTimer,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
@@ -792,10 +1051,13 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
                 if (message.message==WM_QUIT) { quitting=true; break; }
                 bool audioMessage=app.audioWindow && IsDialogMessageW(app.audioWindow,&message);
-                if (!audioMessage && !IsDialogMessageW(app.controls,&message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+                if (!audioMessage && (app.webActive || !IsDialogMessageW(app.controls,&message))) {
+                    TranslateMessage(&message); DispatchMessageW(&message);
+                }
             }
         }
         app.Stop();
+        app.web.Close();
         CloseHandle(app.frameTimer); app.frameTimer=nullptr;
         if (IsWindow(app.output)) DestroyWindow(app.output);
     } catch (hresult_error const& error) {

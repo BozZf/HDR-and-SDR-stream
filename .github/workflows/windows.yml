@@ -16,7 +16,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: HdrBridge-windows-x64
-          path: build/Release/HdrBridge.exe
+          path: |
+            build/Release/HdrBridge.exe
+            build/WebView2-LICENSE.txt
+            LICENSE
+          if-no-files-found: error
       - name: Package optional VB-CABLE
         if: github.event_name != 'pull_request'
         run: ./scripts/package-audio.ps1

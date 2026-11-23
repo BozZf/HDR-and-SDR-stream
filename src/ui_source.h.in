@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr char kUiHtml[] = R"HDRBRIDGEUI(@UI_HTML@)HDRBRIDGEUI";

@@ -6,27 +6,68 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Configure
         run: cmake -S . -B build -A x64
       - name: Build
         run: cmake --build build --config Release
       - name: Test actual HLSL on software D3D11
         run: ctest --test-dir build -C Release --output-on-failure
-      - uses: actions/upload-artifact@v4
+      - name: Stage portable distribution
+        run: cmake --install build --config Release --prefix build/portable-package
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: HdrBridge-windows-x64
-          path: |
-            build/Release/HdrBridge.exe
-            build/WebView2-LICENSE.txt
-            LICENSE
+          path: build/portable-package/
           if-no-files-found: error
       - name: Package optional VB-CABLE
         if: github.event_name != 'pull_request'
         run: ./scripts/package-audio.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: github.event_name != 'pull_request'
         with:
           name: HdrBridge-windows-x64-with-audio
           path: build/audio-package/
           if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.0]')
+    needs: windows
+    runs-on: ubuntu-latest
+    concurrency: hdr-bridge-v1.0.0
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: HdrBridge-windows-x64
+          path: portable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: HdrBridge-windows-x64-with-audio
+          path: with-audio
+      - name: Package and publish v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -f portable/HdrBridge.exe
+          test -f portable/WebView2-LICENSE.txt
+          test -f with-audio/VB-CABLE/VBCABLE_Setup_x64.exe
+          (cd portable && zip -qr ../HdrBridge-1.0.0-windows-x64.zip .)
+          (cd with-audio && zip -qr ../HdrBridge-1.0.0-windows-x64-with-audio.zip .)
+          sha256sum HdrBridge-1.0.0-*.zip > SHA256SUMS.txt
+          gh release create v1.0.0 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'HDR Bridge 1.0.0' --latest --notes-file - \
+            HdrBridge-1.0.0-windows-x64.zip HdrBridge-1.0.0-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
+          HDR Bridge para Windows 11 x64.
+
+          - Interface em cinza escuro com prévia, controles de áudio e ajustes de captura.
+          - O X da janela principal pergunta se você quer minimizar para a bandeja ou sair e permite salvar a escolha.
+          - Aviso de desempenho ao selecionar o modo SDR de compatibilidade GDI.
+
+          Use o ZIP portátil para abrir `HdrBridge.exe`. O pacote `with-audio` inclui o instalador opcional do VB-CABLE. O tema usa o WebView2 do Windows. Quando o runtime está indisponível, o Bridge abre a interface nativa.
+
+          O executável do Bridge ainda não tem assinatura Authenticode. Os SHA-256 dos downloads estão em `SHA256SUMS.txt`.
+          NOTES

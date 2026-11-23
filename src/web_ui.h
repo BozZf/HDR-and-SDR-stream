@@ -96,6 +96,17 @@ private:
                 [](ICoreWebView2*,ICoreWebView2NewWindowRequestedEventArgs* event) -> HRESULT {
                     return event->put_Handled(TRUE);
                 }).Get(),&token));
+        check_hresult(web_->add_ProcessFailed(
+            Callback<ICoreWebView2ProcessFailedEventHandler>(
+                [owner,commandMessage](ICoreWebView2*,ICoreWebView2ProcessFailedEventArgs* event) -> HRESULT {
+                    COREWEBVIEW2_PROCESS_FAILED_KIND kind{};
+                    if (SUCCEEDED(event->get_ProcessFailedKind(&kind)) &&
+                        (kind==COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED ||
+                         kind==COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED)) {
+                        PostMessageW(owner,commandMessage,1,0);
+                    }
+                    return S_OK;
+                }).Get(),&token));
         check_hresult(web_->add_WebMessageReceived(
             Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                 [owner,commandMessage](ICoreWebView2*,ICoreWebView2WebMessageReceivedEventArgs* event) -> HRESULT {

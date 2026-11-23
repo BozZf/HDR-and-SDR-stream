@@ -36,6 +36,7 @@ using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2, kWebCommand = WM_APP + 3;
+constexpr UINT_PTR kCloseDialogTimer=1;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
@@ -738,6 +739,18 @@ struct App {
         SendText(L"status",videoStatusText);
         SendText(L"audio-status",audioStatusText.empty() ? L"Áudio desligado" : audioStatusText);
     }
+    void UseNativeUi() {
+        web.Close();
+        if (!webActive) return;
+        webActive=false;
+        confirmingClose=false;
+        ShowWindow(webHost,SW_HIDE);
+        SetWindowPos(preview,nullptr,20,400,320,180,SWP_NOZORDER|SWP_NOACTIVATE);
+        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+            if (child!=webHost) ShowWindow(child,SW_SHOWNA);
+        }
+        SetWindowPos(controls,nullptr,0,0,740,690,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+    }
     void ApplyPreviewLayout(std::span<int const,4> values) {
         auto x=values[0],y=values[1],width=values[2],height=values[3];
         RECT area{}; GetClientRect(controls,&area);
@@ -786,7 +799,11 @@ struct App {
         dialog.pszVerificationText=L"Salvar minha escolha";
         dialog.cButtons=2; dialog.pButtons=buttons; dialog.nDefaultButton=IDCANCEL;
         int button=IDCANCEL; BOOL remember=FALSE;
+        // The native dialog runs a modal message loop. Keep sharing frames
+        // while it waits for a choice, even without the WebView interface.
+        if (running) SetTimer(controls,kCloseDialogTimer,std::max(1u,1000u/fps),nullptr);
         TaskDialogIndirect(&dialog,&button,nullptr,&remember);
+        KillTimer(controls,kCloseDialogTimer);
         FinishClose(button==kShow ? CloseChoice::Minimize : button==kExit ? CloseChoice::Exit : CloseChoice::Ask,remember!=FALSE);
     }
     void WebCommand(std::wstring_view message) {
@@ -941,13 +958,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             case WM_DISPLAYCHANGE: if (app.sourceBox) app.RefreshSources(); return 0;
             case kClosed: if (wparam == app.generation) app.Stop(); return 0;
             case WM_CLOSE: app.ConfirmClose(); return 0;
+            case WM_TIMER: if (wparam==kCloseDialogTimer) { app.Tick(); return 0; } break;
             case WM_SIZE:
                 if (wparam==SIZE_MINIMIZED) ShowWindow(hwnd,SW_HIDE);
                 else app.ResizeWebUi();
                 return 0;
             case kWebCommand: {
                 std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> command(reinterpret_cast<wchar_t*>(lparam),CoTaskMemFree);
-                if (command) app.WebCommand(command.get());
+                if (wparam==1) app.UseNativeUi();
+                else if (command) app.WebCommand(command.get());
                 return 0;
             }
             case kTray:

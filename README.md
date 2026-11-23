@@ -67,8 +67,9 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
    Ajuste a qualidade também no próprio serviço.
 6. Durante o compartilhamento, mantenha essa saída aberta e sem minimizar. Pode
    esconder os controles pelo X e reabrir pelo ícone da bandeja.
-7. **Fechar saída**, ou o X da janela de saída, fecha só essa janela; a prévia
-   continua. **Parar** encerra a captura e apaga a imagem. **Sair** encerra o app.
+7. Arraste a saída pela imagem para movê-la. **Fechar saída** ou **Esc** com a
+   saída em foco fecha a janela e mantém a prévia. **Parar** encerra a captura e
+   apaga a imagem. **Sair** encerra o app.
 
 ## Prévia pequena e resolução de transmissão
 
@@ -90,9 +91,9 @@ seria necessário implementar uma saída por câmera virtual ou integração dir
 com o serviço. Este aplicativo não implementa esse caminho de vídeo virtual. O áudio usa o
 encaminhamento separado descrito abaixo.
 
-A saída 1080p pode exceder a área útil de uma tela 1080p por causa das bordas.
-Ela só aparece por ação explícita. Não é janela sempre no topo nem é trazida
-para frente a cada frame. Se ambos os visores estiverem ocultos/minimizados, a
+A saída sem moldura mantém a área de imagem exata de 720p ou 1080p. Em um
+monitor de 1920×1080 ela pode preencher toda a tela no modo 1080p. Ela aparece
+ao clicar no botão de saída. Se ambos os visores estiverem ocultos/minimizados, a
 renderização pausa até algum deles voltar; a sessão de captura continua ativa.
 A saída conserva as dimensões ao mudar de monitor/DPI; isso requer teste manual
 em monitores com escalas diferentes.
@@ -102,9 +103,14 @@ em monitores com escalas diferentes.
 O botão **Áudio...** abre uma janela de configuração sem aumentar a janela
 principal. O som fica **desligado por padrão**.
 
-1. Disponibilize um dispositivo virtual de áudio no Windows, se ainda não tiver
-   um. O HDR Bridge não instala drivers e não cria um microfone virtual próprio.
-   Um exemplo de dispositivo externo é o [VB-CABLE](https://vb-audio.com/Cable/).
+Em **Artifacts**, `HdrBridge-windows-x64-with-audio` inclui o app, o pacote
+original VB-CABLE e [instruções de instalação](docs/AUDIO-SETUP.txt). O driver
+é opcional. O Windows pede privilégios de administrador para a instalação e
+o fornecedor orienta reiniciar depois. O artefato `HdrBridge-windows-x64`
+contém o executável portátil.
+
+1. Instale o driver na pasta **VB-CABLE** do pacote com áudio ou use um
+   dispositivo virtual de áudio que já esteja instalado no Windows.
 2. Em **Origem de áudio**, escolha **Aplicativo da janela capturada** ou
    **Sistema**. A primeira opção inclui os processos filhos do aplicativo e exige
    capturar uma janela. A segunda inclui outros aplicativos, notificações e
@@ -149,6 +155,8 @@ conseguir capturá-la. Não há integração específica com todos os serviços.
   selecione a janela **HDR Bridge - Saida SDR - Compatibilidade** no serviço.
   Esse modo copia o quadro já corrigido para uma imagem BGRA8 desenhada com GDI,
   oferecendo uma alternativa a capturadores que não leem a apresentação Direct3D.
+  O cursor da origem fica fora do vídeo nesse modo. O serviço que captura a saída
+  pode acrescentar seu próprio cursor, conforme as opções de captura dele.
 - O modo GDI é somente SDR e faz leitura GPU→CPU. Ele pode custar mais CPU,
   banda de memória e latência; teste primeiro em 720p/30 fps. O modo GPU normal
   continua sendo o padrão. A compatibilidade GDI não garante funcionamento em

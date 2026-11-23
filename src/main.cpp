@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -146,19 +147,14 @@ struct App {
         }
         RefreshAudioStatus(); ShowWindow(audioWindow,SW_SHOW); SetForegroundWindow(audioWindow);
     }
-    void PaintOutput() {
-        PAINTSTRUCT paint{}; HDC dc=BeginPaint(output,&paint);
+    void DrawGdiOutput(HDC dc) {
         RECT client{}; GetClientRect(output,&client);
-        FillRect(dc,&client,static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        if (!compatibility.Pixels().empty()) {
-            BITMAPINFO bitmap{};
-            bitmap.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
-            bitmap.bmiHeader.biWidth=static_cast<LONG>(compatibility.Width());
-            bitmap.bmiHeader.biHeight=-static_cast<LONG>(compatibility.Height());
-            bitmap.bmiHeader.biPlanes=1; bitmap.bmiHeader.biBitCount=32; bitmap.bmiHeader.biCompression=BI_RGB;
-            StretchDIBits(dc,0,0,client.right,client.bottom,0,0,compatibility.Width(),compatibility.Height(),
-                compatibility.Pixels().data(),&bitmap,DIB_RGB_COLORS,SRCCOPY);
-        }
+        compatibility.Draw(dc,client);
+    }
+    void PaintOutput() {
+        PAINTSTRUCT paint{};
+        BeginPaint(output,&paint);
+        DrawGdiOutput(paint.hdc);
         EndPaint(output,&paint);
     }
     struct Source { HMONITOR monitor{}; HWND window{}; DWORD process{}; std::wstring label; };
@@ -181,13 +177,16 @@ struct App {
         if (running) { schedule.Advance(Now()); ArmTimer(); }
     }
     void FitOutputWindow() {
-        auto extent = bridge::OutputExtent(resolution);
-        RECT bounds{0,0,static_cast<LONG>(extent.width),static_cast<LONG>(extent.height)};
-        auto style = static_cast<DWORD>(GetWindowLongPtrW(output,GWL_STYLE));
-        auto exStyle = static_cast<DWORD>(GetWindowLongPtrW(output,GWL_EXSTYLE));
-        if (!AdjustWindowRectExForDpi(&bounds,style,FALSE,exStyle,GetDpiForWindow(output))) throw_last_error();
-        if (!SetWindowPos(output,nullptr,0,0,bounds.right-bounds.left,bounds.bottom-bounds.top,
-            SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
+        auto extent=bridge::OutputExtent(resolution);
+        RECT current{};
+        if (!GetWindowRect(output,&current)) throw_last_error();
+        MONITORINFO info{}; info.cbSize=sizeof(info);
+        if (!GetMonitorInfoW(MonitorFromWindow(output,MONITOR_DEFAULTTONEAREST),&info)) throw_last_error();
+        auto width=static_cast<LONG>(extent.width), height=static_cast<LONG>(extent.height);
+        auto const& monitor=info.rcMonitor;
+        auto x=std::clamp(current.left,monitor.left,std::max(monitor.left,monitor.right-width));
+        auto y=std::clamp(current.top,monitor.top,std::max(monitor.top,monitor.bottom-height));
+        if (!SetWindowPos(output,nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
     }
     static BOOL CALLBACK AddMonitor(HMONITOR monitor,HDC,LPRECT,LPARAM data) {
         auto& self = *reinterpret_cast<App*>(data);
@@ -389,6 +388,7 @@ struct App {
         poolSize=item.Size();
         pool=Direct3D11CaptureFramePool::CreateFreeThreaded(winDevice,DirectXPixelFormat::R16G16B16A16Float,2,poolSize);
         session=pool.CreateCaptureSession(item);
+        session.IsCursorCaptureEnabled(!gdiOutput);
         // Starting capture opens only the embedded preview. The large share
         // window is opt-in and never silently reopened after a source change.
         session.StartCapture();
@@ -468,8 +468,8 @@ struct App {
         }
         if (showOutput) {
             if (gdiOutput) {
-                compatibility.Update(device.get(),context.get(),programFrame.Texture());
-                InvalidateRect(output,nullptr,FALSE); UpdateWindow(output);
+                if (compatibility.Update(device.get(),context.get(),programFrame.Texture()))
+                    InvalidateRect(output,nullptr,FALSE);
             } else {
                 EnsureSurface(output,extent.width,extent.height,swap,target,outputWidth,outputHeight);
                 programFrame.Blit(context.get(),target.get(),extent,vs.get(),displayShader.get(),sampler.get());
@@ -526,7 +526,7 @@ struct App {
             20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
         status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"Compartilhe a saída, não a prévia.\r\nTela branca em outro app? Teste SDR compatibilidade GDI.\r\nConfigure som no botão Áudio.",0,360,488,330,70);
+        Child(L"STATIC",L"Compartilhe a janela de saída sem moldura.\r\nArraste pela imagem ou feche com Esc.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
         audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
         Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
         Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
@@ -561,6 +561,7 @@ struct App {
         if (id == kMode && event == CBN_SELCHANGE) {
             auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
             hdr=selected==1; gdiOutput=selected==2;
+            if (session) session.IsCursorCaptureEnabled(!gdiOutput);
             EnableWindow(exposureSlider,!hdr); EnableWindow(whiteSlider,!hdr);
             ReleaseSwap(); UpdateStatus();
         }
@@ -620,6 +621,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
         } else if (hwnd == app.output) {
             if (message==WM_PAINT && app.gdiOutput) { app.PaintOutput(); return 0; }
             if (message==WM_ERASEBKGND && app.gdiOutput) return 1;
+            if (message==WM_PRINTCLIENT && app.gdiOutput) {
+                app.DrawGdiOutput(reinterpret_cast<HDC>(wparam)); return 0;
+            }
+            if (message==WM_LBUTTONDOWN) {
+                POINT screen{GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)};
+                ClientToScreen(hwnd,&screen);
+                return DefWindowProcW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,MAKELPARAM(screen.x,screen.y));
+            }
+            if (message==WM_KEYDOWN && wparam==VK_ESCAPE) { app.CloseOutput(); return 0; }
             if (message == WM_CLOSE) { app.CloseOutput(); return 0; }
             if (message == WM_DPICHANGED) {
                 auto suggested=reinterpret_cast<RECT*>(lparam);
@@ -643,6 +653,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         klass.hCursor=LoadCursorW(nullptr,IDC_ARROW); klass.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_WINDOW+1);
         klass.lpszClassName=L"HdrBridgeWindow";
         if (!RegisterClassW(&klass)) throw_last_error();
+        WNDCLASSW outputClass=klass;
+        outputClass.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+        outputClass.lpszClassName=L"HdrBridgeOutput";
+        if (!RegisterClassW(&outputClass)) throw_last_error();
         WNDCLASSW previewClass{};
         previewClass.lpfnWndProc=DefWindowProcW; previewClass.hInstance=instance;
         previewClass.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
@@ -650,8 +664,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         if (!RegisterClassW(&previewClass)) throw_last_error();
         app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,
             CW_USEDEFAULT,CW_USEDEFAULT,740,690,nullptr,nullptr,instance,nullptr);
-        app.output=CreateWindowW(klass.lpszClassName,L"HDR Bridge - Saida SDR",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
-            CW_USEDEFAULT,CW_USEDEFAULT,1280,760,nullptr,nullptr,instance,nullptr);
+        app.output=CreateWindowExW(WS_EX_APPWINDOW,outputClass.lpszClassName,L"HDR Bridge - Saida SDR",WS_POPUP,
+            0,0,1280,720,nullptr,nullptr,instance,nullptr);
         if (!app.controls || !app.output) throw_last_error();
         app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
         if (!app.frameTimer) app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,0,TIMER_ALL_ACCESS);

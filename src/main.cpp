@@ -79,46 +79,6 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     return blob;
 }
 
-LRESULT CALLBACK ToolbarButtonProc(HWND hwnd,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR,DWORD_PTR context) {
-    auto& hovered=*reinterpret_cast<bool*>(context);
-    if (message==WM_MOUSEMOVE && !hovered) {
-        TRACKMOUSEEVENT tracking{sizeof(tracking),TME_LEAVE,hwnd,0};
-        if (TrackMouseEvent(&tracking)) {
-            hovered=true;
-            InvalidateRect(hwnd,nullptr,FALSE);
-        }
-    } else if (message==WM_MOUSELEAVE && hovered) {
-        hovered=false;
-        InvalidateRect(hwnd,nullptr,FALSE);
-    }
-    return DefSubclassProc(hwnd,message,wparam,lparam);
-}
-
-LRESULT CALLBACK ComboThemeProc(HWND hwnd,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR,DWORD_PTR context) {
-    auto const& theme=*reinterpret_cast<bridge::NativeTheme const*>(context);
-    if (message==WM_PAINT && !theme.HighContrast()) {
-        PAINTSTRUCT paint{};
-        auto dc=BeginPaint(hwnd,&paint);
-        theme.DrawCombo(hwnd,dc);
-        EndPaint(hwnd,&paint);
-        return 0;
-    }
-    if (message==WM_PRINTCLIENT && !theme.HighContrast()) {
-        theme.DrawCombo(hwnd,reinterpret_cast<HDC>(wparam));
-        return 0;
-    }
-    if (message==WM_ERASEBKGND && !theme.HighContrast()) return TRUE;
-
-    auto result=DefSubclassProc(hwnd,message,wparam,lparam);
-    switch (message) {
-    case WM_SETFOCUS: case WM_KILLFOCUS: case WM_ENABLE:
-    case CB_SETCURSEL: case CB_RESETCONTENT: case CB_SHOWDROPDOWN:
-        InvalidateRect(hwnd,nullptr,FALSE);
-        break;
-    }
-    return result;
-}
-
 struct App {
     HWND controls{}, output{}, outputToolbar{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
@@ -132,7 +92,6 @@ struct App {
     bool confirmingClose=false;
     HWND outputToolbarTitle{},outputToolbarLower{},outputToolbarClose{};
     UINT outputToolbarDpi{};
-    bool toolbarLowerHovered=false,toolbarCloseHovered=false;
     HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
     bridge::AudioBridge audio;
     bridge::AudioSource audioSource=bridge::AudioSource::Off;
@@ -280,12 +239,7 @@ struct App {
         if (!SetWindowPos(output,nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
     }
     void HideOutputToolbar() {
-        if (!outputToolbar || !IsWindowVisible(outputToolbar)) return;
-        ShowWindow(outputToolbar,SW_HIDE);
-        toolbarLowerHovered=false;
-        toolbarCloseHovered=false;
-        InvalidateRect(outputToolbarLower,nullptr,FALSE);
-        InvalidateRect(outputToolbarClose,nullptr,FALSE);
+        if (outputToolbar && IsWindowVisible(outputToolbar)) ShowWindow(outputToolbar,SW_HIDE);
     }
     void LayoutOutputToolbar(UINT dpi) {
         auto px=[dpi](int value) { return MulDiv(value,static_cast<int>(dpi),96); };
@@ -651,12 +605,11 @@ struct App {
     }
     HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0, HWND parent = nullptr) {
         bool combo=wcscmp(klass,WC_COMBOBOXW)==0;
-        if (wcscmp(klass,WC_BUTTONW)==0) style|=BS_OWNERDRAW;
-        else if (combo) style|=CBS_OWNERDRAWFIXED|CBS_HASSTRINGS;
+        if (combo) style|=CBS_OWNERDRAWFIXED|CBS_HASSTRINGS;
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
             parent ? parent : controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
         if (!child) throw_last_error();
-        if (combo) SetWindowSubclass(child,ComboThemeProc,1,reinterpret_cast<DWORD_PTR>(&theme));
+        if (combo || wcscmp(klass,WC_BUTTONW)==0) theme.AttachControl(child,combo);
         SetControlFont(child,GetDpiForWindow(parent ? parent : controls));
         return child;
     }
@@ -824,8 +777,6 @@ struct App {
             outputToolbarTitle=Child(L"STATIC",L"Saída",SS_CENTERIMAGE,0,0,1,1,kToolbarHeading,outputToolbar);
             outputToolbarLower=Child(L"BUTTON",L"Recolher",0,0,0,1,1,kLowerToolbar,outputToolbar);
             outputToolbarClose=Child(L"BUTTON",L"Fechar",0,0,0,1,1,kHideOutput,outputToolbar);
-            SetWindowSubclass(outputToolbarLower,ToolbarButtonProc,1,reinterpret_cast<DWORD_PTR>(&toolbarLowerHovered));
-            SetWindowSubclass(outputToolbarClose,ToolbarButtonProc,1,reinterpret_cast<DWORD_PTR>(&toolbarCloseHovered));
         } else if (outputToolbar) {
             DestroyWindow(outputToolbar);
             outputToolbar=nullptr;
@@ -990,7 +941,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 using bridge::SurfaceRole;
                 auto id=GetDlgCtrlID(reinterpret_cast<HWND>(lparam));
                 auto role=SurfaceRole::Panel;
-                if (hwnd==app.audioWindow || id==kTitle || id==kThemeLabel || id==kTheme) role=SurfaceRole::Page;
+                if (hwnd==app.audioWindow || id==kTitle || id==kThemeLabel || id==kTheme || id==kResetClose)
+                    role=SurfaceRole::Page;
                 else if (id==kPreviewEmpty) role=SurfaceRole::Preview;
                 else if (id==kGdiNotice) role=SurfaceRole::Notice;
                 else if (id==kCaptureState && app.running) role=SurfaceRole::Active;
@@ -1004,13 +956,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 return TRUE;
             }
             case WM_DRAWITEM: {
-                auto item=*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam);
-                auto id=item.CtlID;
-                bool toolbar=hwnd==app.outputToolbar;
-                if (toolbar && (id==kLowerToolbar ? app.toolbarLowerHovered : app.toolbarCloseHovered))
-                    item.itemState|=ODS_HOTLIGHT;
-                app.theme.Draw(item,id==kPick || id==kShow || id==kAudioApply,
-                    toolbar || (hwnd==app.controls && id!=kResetClose));
+                auto& item=*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam);
+                if (item.CtlType!=ODT_COMBOBOX) break;
+                app.theme.DrawListItem(item);
                 return TRUE;
             }
             }

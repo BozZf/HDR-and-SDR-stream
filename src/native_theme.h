@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <dwmapi.h>
+#include <commctrl.h>
 #include <map>
 #include <string>
 #include <tuple>
@@ -69,10 +70,10 @@ public:
             Dark() ? RGB(57,61,71) : RGB(215,220,229),radius);
     }
 
-    COLORREF ControlSurface(bool selected,bool primary) const {
+    COLORREF ControlSurface(bool selected) const {
         if (HighContrast()) return GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
-        if (Dark()) return selected ? RGB(76,79,88) : primary ? RGB(67,70,79) : RGB(60,62,70);
-        return selected ? RGB(207,216,232) : primary ? RGB(216,224,239) : RGB(233,236,242);
+        if (Dark()) return selected ? RGB(76,79,88) : RGB(60,62,70);
+        return selected ? RGB(207,216,232) : RGB(233,236,242);
     }
 
     LRESULT ControlColor(HDC dc,SurfaceRole role) const {
@@ -82,7 +83,7 @@ public:
         if (HighContrast()) text=GetSysColor(COLOR_WINDOWTEXT);
         else {
             switch (role) {
-            case SurfaceRole::List: background=ControlSurface(false,false); break;
+            case SurfaceRole::List: background=ControlSurface(false); break;
             case SurfaceRole::Preview:
                 background=dark ? RGB(22,24,29) : RGB(226,230,239);
                 text=dark ? RGB(175,182,197) : RGB(76,87,108);
@@ -122,22 +123,39 @@ public:
         if (oldFont) SelectObject(dc,oldFont);
     }
 
-    void DrawCombo(HWND control,HDC dc) const {
-        RECT rect{};
-        GetClientRect(control,&rect);
+    COLORREF DrawControlFace(HWND control,HDC dc,RECT const& rect,bool active) const {
         auto parent=GetParent(control);
         auto brush=reinterpret_cast<HBRUSH>(SendMessageW(parent,WM_CTLCOLORSTATIC,
             reinterpret_cast<WPARAM>(dc),reinterpret_cast<LPARAM>(control)));
         FillRect(dc,&rect,brush);
-        bool dark=Dark(), enabled=IsWindowEnabled(control)!=FALSE;
-        bool focused=GetFocus()==control, open=SendMessageW(control,CB_GETDROPPEDSTATE,0,0)!=0;
+        bool dark=Dark();
+        bool enabled=IsWindowEnabled(control)!=FALSE;
         auto text=dark ? RGB(239,240,243) : RGB(33,37,46);
         if (!enabled) text=dark ? RGB(155,160,172) : RGB(110,118,133);
-        auto border=focused || open ? (dark ? RGB(137,145,164) : RGB(104,121,151))
+        auto border=enabled && (GetFocus()==control || active) ? (dark ? RGB(137,145,164) : RGB(104,121,151))
             : (dark ? RGB(82,87,101) : RGB(188,197,213));
+        Rounded(dc,rect,ControlSurface(enabled && active),border,
+            MulDiv(12,static_cast<int>(GetDpiForWindow(control)),96));
+        return text;
+    }
+
+    void DrawButton(HWND control,HDC dc,bool hovered) const {
+        RECT rect{};
+        GetClientRect(control,&rect);
+        auto state=SendMessageW(control,BM_GETSTATE,0,0);
+        auto text=DrawControlFace(control,dc,rect,hovered || (state & BST_PUSHED)!=0);
+        auto inset=MulDiv(8,static_cast<int>(GetDpiForWindow(control)),96);
+        InflateRect(&rect,-inset,0);
+        DrawLabel(control,dc,rect,text,ControlText(control,true),DT_CENTER|DT_HIDEPREFIX);
+    }
+
+    void DrawCombo(HWND control,HDC dc,bool hovered) const {
+        RECT rect{};
+        GetClientRect(control,&rect);
+        bool open=SendMessageW(control,CB_GETDROPPEDSTATE,0,0)!=0;
+        auto text=DrawControlFace(control,dc,rect,hovered || open);
         auto dpi=static_cast<int>(GetDpiForWindow(control));
         auto px=[dpi](int logical) { return MulDiv(logical,dpi,96); };
-        Rounded(dc,rect,ControlSurface(open,false),border,px(12));
         int x=rect.right-px(14),y=(rect.top+rect.bottom)/2;
         POINT arrow[]={{x-px(4),y-px(2)},{x,y+px(2)},{x+px(4),y-px(2)}};
         auto oldPen=SelectObject(dc,GetStockObject(DC_PEN));
@@ -151,12 +169,11 @@ public:
         if (index!=CB_ERR) DrawLabel(control,dc,rect,text,ControlText(control,false,index),DT_LEFT|DT_NOPREFIX);
     }
 
-    void Draw(DRAWITEMSTRUCT const& item,bool primary,bool panel) const {
+    void DrawListItem(DRAWITEMSTRUCT const& item) const {
         auto dark=Dark();
         bool selected=(item.itemState & (ODS_SELECTED|ODS_HOTLIGHT))!=0;
         bool disabled=(item.itemState & (ODS_DISABLED|ODS_GRAYED))!=0;
-        bool button=item.CtlType==ODT_BUTTON;
-        auto bg=ControlSurface(selected,primary && !disabled);
+        auto bg=ControlSurface(selected);
         auto fg=dark ? (disabled ? RGB(155,160,172) : RGB(239,240,243))
             : disabled ? RGB(110,118,133) : RGB(33,37,46);
         if (HighContrast()) {
@@ -164,21 +181,53 @@ public:
         }
         auto dc=item.hDC;
         auto rect=item.rcItem;
-        if (button) {
-            FillRect(dc,&rect,Brush(dc,Surface(panel)));
-            auto border=HighContrast() ? fg : dark ? RGB(82,87,101) : RGB(188,197,213);
-            Rounded(dc,rect,bg,border,MulDiv(13,static_cast<int>(GetDpiForWindow(item.hwndItem)),96));
-        } else FillRect(dc,&rect,Brush(dc,bg));
+        FillRect(dc,&rect,Brush(dc,bg));
         auto focus=rect;
         InflateRect(&focus,-3,-3);
         if ((item.itemState & ODS_FOCUS) && !(item.itemState & ODS_NOFOCUSRECT)) DrawFocusRect(dc,&focus);
 
         InflateRect(&rect,-5,0);
-        UINT align=button ? DT_CENTER : DT_LEFT|DT_NOPREFIX;
-        if (item.itemState & ODS_NOACCEL) align|=DT_HIDEPREFIX;
-        DrawLabel(item.hwndItem,dc,rect,fg,ControlText(item.hwndItem,button,item.itemID),align);
+        DrawLabel(item.hwndItem,dc,rect,fg,ControlText(item.hwndItem,false,item.itemID),DT_LEFT|DT_NOPREFIX);
+    }
+
+    void AttachControl(HWND control,bool combo) {
+        SetWindowSubclass(control,ControlProc,combo ? kCombo : kButton,reinterpret_cast<DWORD_PTR>(this));
     }
 private:
+    static constexpr UINT_PTR kButton=1,kCombo=2;
+    static LRESULT CALLBACK ControlProc(HWND window,UINT message,WPARAM wparam,LPARAM lparam,
+                                        UINT_PTR kind,DWORD_PTR context) {
+        auto const& theme=*reinterpret_cast<NativeTheme const*>(context);
+        if ((message==WM_PAINT || message==WM_PRINTCLIENT || message==WM_ERASEBKGND) && !HighContrast()) {
+            if (message==WM_ERASEBKGND) return TRUE;
+            PAINTSTRUCT paint{};
+            HDC dc=message==WM_PAINT ? BeginPaint(window,&paint) : reinterpret_cast<HDC>(wparam);
+            POINT cursor{};
+            bool hovered=GetCursorPos(&cursor) && WindowFromPoint(cursor)==window;
+            if (kind==kCombo) theme.DrawCombo(window,dc,hovered);
+            else theme.DrawButton(window,dc,hovered);
+            if (message==WM_PAINT) EndPaint(window,&paint);
+            return 0;
+        }
+
+        auto result=DefSubclassProc(window,message,wparam,lparam);
+        switch (message) {
+        case WM_MOUSEMOVE: {
+            TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,window,0};
+            TrackMouseEvent(&track);
+            InvalidateRect(window,nullptr,FALSE);
+            break;
+        }
+        case WM_MOUSELEAVE: case WM_ENABLE: case WM_SETTEXT:
+        case WM_SETFOCUS: case WM_KILLFOCUS: case WM_CAPTURECHANGED:
+        case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_KEYDOWN: case WM_KEYUP:
+        case BM_SETSTATE: case CB_SETCURSEL: case CB_RESETCONTENT: case CB_SHOWDROPDOWN:
+            InvalidateRect(window,nullptr,FALSE);
+            break;
+        }
+        return result;
+    }
+
     std::map<std::tuple<UINT,int,bool>,HFONT> fonts_;
 };
 }

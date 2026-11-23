@@ -51,6 +51,7 @@ struct App {
     HWND controls{}, output{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
     bool hdr = false, running = false, gdiOutput = false;
+    bool outputLowered = false;
     HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
     bridge::AudioBridge audio;
     bridge::AudioSource audioSource=bridge::AudioSource::Off;
@@ -357,6 +358,7 @@ struct App {
             if (previewTarget) { context->ClearRenderTargetView(previewTarget.get(),black); previewSwap->Present(0,0); }
         }
         ShowWindow(output, SW_HIDE);
+        outputLowered=false;
         EnableWindow(GetDlgItem(controls,kShow),FALSE);
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         Status(L"Parado. Escolha a janela ou monitor de origem.");
@@ -411,6 +413,7 @@ struct App {
         text += hdr ? L"\r\nHDR scRGB local. A transmissão depende do serviço."
                     : gdiOutput ? L"\r\nSDR compatível (GDI; maior uso de CPU)." : L"\r\nSDR com tone mapping.";
         if (IsIconic(output)) text+=L"\r\nSaída minimizada. Restaure para compartilhar.";
+        else if (outputLowered) text+=L"\r\nSaída atrás das janelas. Vídeo ativo.";
         else if (IsWindowVisible(output)) text+=L"\r\nJanela de saída aberta.";
         else text+=L"\r\nPrévia interna; janela de saída fechada.";
         auto extent=bridge::OutputExtent(resolution);
@@ -534,7 +537,7 @@ struct App {
             20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
         status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"Se disponível, compartilhe só a área cliente.\r\nRestaure a saída para transmitir.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
+        Child(L"STATIC",L"Se disponível, compartilhe só a área cliente.\r\nO botão minimizar põe a saída atrás das janelas.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
         audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
         Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
         Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
@@ -560,7 +563,11 @@ struct App {
         if (id == kShow && running) {
             if (IsIconic(output)) ShowWindow(output,SW_RESTORE);
             FitOutputWindow();
-            ShowWindow(output,SW_SHOWNOACTIVATE);
+            // Bring back the same shareable HWND so an existing capture can
+            // keep following it throughout minimize and restore.
+            if (!SetWindowPos(output,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW))
+                throw_last_error();
+            outputLowered=false;
             EnableWindow(GetDlgItem(controls,kHideOutput),TRUE);
             Tick(); UpdateStatus();
         }
@@ -583,12 +590,22 @@ struct App {
             ReleaseSwap(); FitOutputWindow(); UpdateStatus();
         }
     }
+    void LowerOutput() {
+        // A true Win32 minimize can withdraw the window's content from other
+        // programs. Lower this window while keeping its size and visibility.
+        if (!SetWindowPos(output,HWND_BOTTOM,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))
+            throw_last_error();
+        if (GetActiveWindow()==output) SetActiveWindow(nullptr);
+        outputLowered=true;
+        UpdateStatus();
+    }
     void CloseOutput() {
         compatibility.Clear();
         if (target) {
             float black[4]={0,0,0,1}; context->ClearRenderTargetView(target.get(),black); swap->Present(0,0);
         }
         ShowWindow(output,SW_HIDE);
+        outputLowered=false;
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         UpdateStatus();
     }
@@ -627,6 +644,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             if (message==WM_HSCROLL) { app.AudioGain(); return 0; }
             if (message==WM_CLOSE) { ShowWindow(hwnd,SW_HIDE); return 0; }
         } else if (hwnd == app.output) {
+            if (message==WM_SYSCOMMAND && (wparam & 0xfff0)==SC_MINIMIZE && app.running) {
+                app.LowerOutput(); return 0;
+            }
+            if (message==WM_ACTIVATE && LOWORD(wparam)!=WA_INACTIVE && app.outputLowered) {
+                app.outputLowered=false;
+                app.UpdateStatus();
+            }
             if (message==WM_PAINT && app.gdiOutput) { app.PaintOutput(); return 0; }
             if (message==WM_ERASEBKGND && app.gdiOutput) return 1;
             if (message==WM_PRINTCLIENT && app.gdiOutput) {

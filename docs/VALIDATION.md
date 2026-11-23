@@ -17,7 +17,7 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 | Esconder controles | Transmissão continua; ícone da bandeja reabre controles. |
 | Fechar saída | Apenas a saída grande fecha; prévia e captura continuam. |
 | Parar | Sessão termina; prévia, quadro interno e saída são apagados. |
-| Botão minimizar da saída | A saída vai para trás e continua apresentando vídeo no mesmo HWND. Conferir se o serviço recebe quadros novos com a janela coberta. |
+| Recolher saída | A saída vai para trás e continua apresentando vídeo no mesmo HWND. Conferir se o serviço recebe quadros novos com a janela coberta. |
 | Monitor inteiro | Saída em segundo monitor; origem não contém a saída. |
 | Alternar HDR / reconectar tela | Registrar eventuais falhas; reiniciar app em perda de dispositivo. |
 | NVIDIA / AMD / Intel / GPUs distintas | Testar individualmente; sem alegar compatibilidade sem execução. |
@@ -66,13 +66,15 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - GDI: confirmar ausência de imagem antiga ao fechar/reabrir ou parar captura.
 - Na saída GDI, mover o mouse sobre a origem e sobre a saída. Conferir se há
   piscar no monitor HDR local e na transmissão do ScreenShare separadamente.
-- Na barra de título, pressionar minimizar durante uma live e cobrir a saída com
-  outra janela. Conferir quadros novos no espectador. Clicar **Abrir saída para
-  Discord** deve trazê-la à frente sem mudar a fonte. Repetir com GPU e GDI.
+- Com a saída aberta, passar o mouse no canto superior direito, usar o painel e
+  afastar o cursor. Verificar a exibição local, o desaparecimento ao sair e a
+  ausência do painel no espectador, inclusive com DPI diferente.
+- Pressionar **Recolher** durante uma live e cobrir a saída com outra janela.
+  Conferir quadros novos no espectador. **Abrir saída para Discord** deve trazê-la
+  à frente sem mudar a fonte. Repetir com GPU e GDI.
 - Trocar resolução enquanto a saída está atrás das janelas e trazê-la à frente
   para conferir as dimensões. Fechar a saída com X ou Esc. A prévia deve continuar.
-- Em OBS/WGC com Área cliente, verificar que a transmissão omite a moldura em
-  720p e 1080p. No Go Live, registrar se o método em uso inclui a moldura.
+- Em ScreenShare e Go Live, verificar ausência de moldura em 720p e 1080p.
 - Extrair o pacote com áudio em um Windows sem cabo instalado, instalar o driver
   da pasta VB-CABLE, reiniciar e confirmar CABLE Input e CABLE Output no Windows.
 - Medir sincronismo A/V na ponta remota. Não prometer sincronismo por testes de fila.

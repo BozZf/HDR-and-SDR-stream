@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
 #include <shobjidl.h>
@@ -34,7 +35,8 @@ constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
               kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
-              kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118;
+              kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118, kLowerOutput = 119,
+              kLowerToolbar = 120;
 
 com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     com_ptr<ID3DBlob> blob, errors;
@@ -48,16 +50,18 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
 }
 
 struct App {
-    HWND controls{}, output{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
+    HWND controls{}, output{}, outputToolbar{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
     bool hdr = false, running = false, gdiOutput = false;
     bool outputLowered = false;
+    HWND outputToolbarTitle{},outputToolbarLower{},outputToolbarClose{};
     HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
     bridge::AudioBridge audio;
     bridge::AudioSource audioSource=bridge::AudioSource::Off;
     std::vector<bridge::AudioDestination> audioDestinations;
     std::wstring audioDestination,audioConfigError;
     DWORD activeProcess=0;
+    HWND activeSourceWindow{};
     bridge::SdrReadback compatibility;
     void RefreshAudioDestinations() {
         std::wstring previous=audioDestination;
@@ -173,27 +177,59 @@ struct App {
     }
     void OnFrameTimer() {
         RefreshAudioStatus();
+        UpdateOutputToolbar();
         Tick();
         if (running) { schedule.Advance(Now()); ArmTimer(); }
     }
     void FitOutputWindow() {
         if (IsIconic(output)) return;
         auto extent=bridge::OutputExtent(resolution);
-        RECT frame{0,0,static_cast<LONG>(extent.width),static_cast<LONG>(extent.height)};
-        auto style=static_cast<DWORD>(GetWindowLongPtrW(output,GWL_STYLE));
-        auto exStyle=static_cast<DWORD>(GetWindowLongPtrW(output,GWL_EXSTYLE));
-        if (!AdjustWindowRectExForDpi(&frame,style,FALSE,exStyle,GetDpiForWindow(output))) throw_last_error();
         RECT current{};
         if (!GetWindowRect(output,&current)) throw_last_error();
         MONITORINFO info{}; info.cbSize=sizeof(info);
         if (!GetMonitorInfoW(MonitorFromWindow(output,MONITOR_DEFAULTTONEAREST),&info)) throw_last_error();
-        auto width=frame.right-frame.left, height=frame.bottom-frame.top;
+        auto width=static_cast<LONG>(extent.width),height=static_cast<LONG>(extent.height);
         auto const& workArea=info.rcWork;
         auto x=std::clamp(current.left,workArea.left,std::max(workArea.left,workArea.right-width));
         auto y=std::clamp(current.top,workArea.top,std::max(workArea.top,workArea.bottom-height));
         if (current.left==x && current.top==y && current.right-current.left==width && current.bottom-current.top==height)
             return;
         if (!SetWindowPos(output,nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
+    }
+    void HideOutputToolbar() {
+        if (outputToolbar && IsWindowVisible(outputToolbar)) ShowWindow(outputToolbar,SW_HIDE);
+    }
+    void UpdateOutputToolbar() {
+        if (!outputToolbar) return;
+        if (!running || outputLowered || !IsWindowVisible(output) || IsIconic(output)) {
+            HideOutputToolbar();
+            return;
+        }
+        RECT outputBounds{};
+        POINT pointer{};
+        if (!GetWindowRect(output,&outputBounds) || !GetCursorPos(&pointer)) {
+            HideOutputToolbar();
+            return;
+        }
+        auto dpi=static_cast<int>(GetDpiForWindow(output));
+        auto px=[dpi](int value) { return MulDiv(value,dpi,96); };
+        auto width=px(310),height=px(38);
+        auto x=outputBounds.right-width,y=outputBounds.top;
+        RECT hotspot{x,y,outputBounds.right,y+px(12)};
+        RECT toolbarBounds{x,y,outputBounds.right,y+height};
+        auto hit=GetAncestor(WindowFromPoint(pointer),GA_ROOT);
+        bool insideToolbar=IsWindowVisible(outputToolbar) && hit==outputToolbar && PtInRect(&toolbarBounds,pointer);
+        bool insideHotspot=hit==output && PtInRect(&hotspot,pointer);
+        if (!insideToolbar && !insideHotspot) {
+            HideOutputToolbar();
+            return;
+        }
+        RECT current{};
+        if (IsWindowVisible(outputToolbar) && GetWindowRect(outputToolbar,&current) && EqualRect(&current,&toolbarBounds)) return;
+        SetWindowPos(outputToolbar,HWND_TOP,x,y,width,height,SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_SHOWWINDOW);
+        MoveWindow(outputToolbarTitle,px(10),px(10),px(120),px(22),TRUE);
+        MoveWindow(outputToolbarLower,px(133),px(5),px(100),px(28),TRUE);
+        MoveWindow(outputToolbarClose,px(238),px(5),px(65),px(28),TRUE);
     }
     static BOOL CALLBACK AddMonitor(HMONITOR monitor,HDC,LPRECT,LPARAM data) {
         auto& self = *reinterpret_cast<App*>(data);
@@ -340,6 +376,7 @@ struct App {
     }
     void Stop() {
         audio.Stop(); audioConfigError.clear(); activeProcess=0;
+        activeSourceWindow=nullptr;
         RefreshAudioStatus();
         compatibility.Clear();
         if (frameTimer) CancelWaitableTimer(frameTimer);
@@ -357,10 +394,12 @@ struct App {
             if (target) { context->ClearRenderTargetView(target.get(),black); swap->Present(0,0); }
             if (previewTarget) { context->ClearRenderTargetView(previewTarget.get(),black); previewSwap->Present(0,0); }
         }
+        HideOutputToolbar();
         ShowWindow(output, SW_HIDE);
         outputLowered=false;
         EnableWindow(GetDlgItem(controls,kShow),FALSE);
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
+        EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
         Status(L"Parado. Escolha a janela ou monitor de origem.");
     }
     void StartSelected() {
@@ -402,6 +441,7 @@ struct App {
         session.StartCapture();
         running=true;
         activeProcess=source.process;
+        activeSourceWindow=source.window;
         RestartAudio();
         EnableWindow(GetDlgItem(controls,kShow),TRUE);
         ArmTimer(true);
@@ -537,16 +577,28 @@ struct App {
             20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
         status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"Se disponível, compartilhe só a área cliente.\r\nO botão minimizar põe a saída atrás das janelas.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
+        Child(L"STATIC",L"Passe o mouse no canto superior direito da saída.\r\nUse Recolher para pôr o vídeo atrás das janelas.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
         audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
         Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
-        Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,280,600,200,32,kHideOutput);
+        Child(L"BUTTON",L"Recolher saída",WS_TABSTOP,270,600,130,32,kLowerOutput);
+        Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,410,600,130,32,kHideOutput);
         Child(L"BUTTON",L"Sair",WS_TABSTOP,570,600,120,32,kExit);
         EnableWindow(GetDlgItem(controls,kShow),FALSE);
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
+        EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
         RefreshSources();
-        // Only the controller is excluded; the output MUST remain capturable.
+        // Keep the controller and local toolbar outside the shared image.
         SetWindowDisplayAffinity(controls, WDA_EXCLUDEFROMCAPTURE);
+        outputToolbar=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,L"HdrBridgeWindow",L"",
+            WS_POPUP|WS_CLIPCHILDREN,0,0,310,38,output,nullptr,GetModuleHandleW(nullptr),nullptr);
+        if (outputToolbar && SetWindowDisplayAffinity(outputToolbar,WDA_EXCLUDEFROMCAPTURE)) {
+            outputToolbarTitle=Child(L"STATIC",L"HDR Bridge",0,10,10,120,22,0,outputToolbar);
+            outputToolbarLower=Child(L"BUTTON",L"Recolher",0,133,5,100,28,kLowerToolbar,outputToolbar);
+            outputToolbarClose=Child(L"BUTTON",L"Fechar",0,238,5,65,28,kHideOutput,outputToolbar);
+        } else if (outputToolbar) {
+            DestroyWindow(outputToolbar);
+            outputToolbar=nullptr;
+        }
         NOTIFYICONDATAW icon{sizeof(icon)};
         icon.hWnd = controls; icon.uID = 1; icon.uFlags = NIF_ICON|NIF_MESSAGE|NIF_TIP;
         icon.uCallbackMessage = kTray; icon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
@@ -569,9 +621,11 @@ struct App {
                 throw_last_error();
             outputLowered=false;
             EnableWindow(GetDlgItem(controls,kHideOutput),TRUE);
+            EnableWindow(GetDlgItem(controls,kLowerOutput),TRUE);
             Tick(); UpdateStatus();
         }
         if (id == kHideOutput) CloseOutput();
+        if ((id == kLowerOutput || id == kLowerToolbar) && running) LowerOutput();
         if (id == kExit) { Stop(); DestroyWindow(controls); }
         if (id == kMode && event == CBN_SELCHANGE) {
             auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
@@ -593,13 +647,22 @@ struct App {
     void LowerOutput() {
         // A true Win32 minimize can withdraw the window's content from other
         // programs. Lower this window while keeping its size and visibility.
+        HideOutputToolbar();
+        outputLowered=true;
         if (!SetWindowPos(output,HWND_BOTTOM,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE))
             throw_last_error();
-        if (GetActiveWindow()==output) SetActiveWindow(nullptr);
-        outputLowered=true;
+        if (GetForegroundWindow()==output) {
+            DWORD process=0;
+            if (activeSourceWindow) GetWindowThreadProcessId(activeSourceWindow,&process);
+            if (process && process==activeProcess && IsWindowVisible(activeSourceWindow) && !IsIconic(activeSourceWindow))
+                SetForegroundWindow(activeSourceWindow);
+            else if (IsWindowVisible(controls)) SetForegroundWindow(controls);
+            if (GetActiveWindow()==output) SetActiveWindow(nullptr);
+        }
         UpdateStatus();
     }
     void CloseOutput() {
+        HideOutputToolbar();
         compatibility.Clear();
         if (target) {
             float black[4]={0,0,0,1}; context->ClearRenderTargetView(target.get(),black); swap->Present(0,0);
@@ -607,6 +670,7 @@ struct App {
         ShowWindow(output,SW_HIDE);
         outputLowered=false;
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
+        EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
         UpdateStatus();
     }
     void Sliders() {
@@ -643,6 +707,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             if (message==WM_COMMAND) { app.Command(LOWORD(wparam),HIWORD(wparam)); return 0; }
             if (message==WM_HSCROLL) { app.AudioGain(); return 0; }
             if (message==WM_CLOSE) { ShowWindow(hwnd,SW_HIDE); return 0; }
+        } else if (hwnd == app.outputToolbar) {
+            if (message==WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+            if (message==WM_COMMAND) { app.Command(LOWORD(wparam),HIWORD(wparam)); return 0; }
+            if (message==WM_LBUTTONDOWN) {
+                POINT pointer{GET_X_LPARAM(lparam),GET_Y_LPARAM(lparam)};
+                ClientToScreen(hwnd,&pointer);
+                app.HideOutputToolbar();
+                return SendMessageW(app.output,WM_NCLBUTTONDOWN,HTCAPTION,MAKELPARAM(pointer.x,pointer.y));
+            }
         } else if (hwnd == app.output) {
             if (message==WM_SYSCOMMAND && (wparam & 0xfff0)==SC_MINIMIZE && app.running) {
                 app.LowerOutput(); return 0;
@@ -657,6 +730,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 app.DrawGdiOutput(reinterpret_cast<HDC>(wparam)); return 0;
             }
             if (message==WM_KEYDOWN && wparam==VK_ESCAPE) { app.CloseOutput(); return 0; }
+            if (message==WM_KEYDOWN && wparam==VK_F9) { app.LowerOutput(); return 0; }
             if (message == WM_CLOSE) { app.CloseOutput(); return 0; }
             if (message==WM_SIZE && app.running) {
                 if (wparam==SIZE_RESTORED) {
@@ -699,7 +773,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,
             CW_USEDEFAULT,CW_USEDEFAULT,740,690,nullptr,nullptr,instance,nullptr);
         app.output=CreateWindowExW(WS_EX_APPWINDOW,outputClass.lpszClassName,L"HDR Bridge - Saida SDR",
-            WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,
+            WS_POPUP,
             0,0,1280,720,nullptr,nullptr,instance,nullptr);
         if (!app.controls || !app.output) throw_last_error();
         app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);

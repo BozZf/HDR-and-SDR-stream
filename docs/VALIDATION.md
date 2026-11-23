@@ -66,8 +66,11 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - GDI: confirmar ausência de imagem antiga ao fechar/reabrir ou parar captura.
 - Na saída GDI, mover o mouse sobre a origem e sobre a saída. Conferir se há
   piscar no monitor HDR local e na transmissão do ScreenShare separadamente.
-- No Go Live, selecionar novamente a saída SDR e verificar que a imagem chega
-  sem barra de título em 720p e 1080p. Arrastar pela imagem e fechar com Esc.
+- Verificar barra de título, minimizar/restaurar pela barra de tarefas e fechar
+  saída com X ou Esc. Trocar resolução enquanto minimizada e restaurar para
+  conferir as novas dimensões da área interna. A sessão e a prévia devem continuar.
+- Em OBS/WGC com Área cliente, verificar que a transmissão omite a moldura em
+  720p e 1080p. No Go Live, registrar se o método em uso inclui a moldura.
 - Extrair o pacote com áudio em um Windows sem cabo instalado, instalar o driver
   da pasta VB-CABLE, reiniciar e confirmar CABLE Input e CABLE Output no Windows.
 - Medir sincronismo A/V na ponta remota. Não prometer sincronismo por testes de fila.

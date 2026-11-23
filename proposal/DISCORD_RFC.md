@@ -69,6 +69,12 @@ from preview size. The standalone app still needs its optional full-size share
 window because it has no direct encoder integration or virtual camera; sharing
 a miniature window does not preserve full-resolution pixels at the receiver.
 
+For window sharing, offer a client-area crop before encoding so the local window
+can keep its native title bar and minimize button. Recompute the crop when DPI,
+window bounds, or source size changes. For audio, allow a separate application
+source so the user can share corrected video and capture game audio directly via
+WASAPI process loopback. Keep the chosen audio source visible in the share UI.
+
 Changing this setting restarts/reconfigures the media path cleanly at a keyframe
 boundary; do not briefly expose incorrectly tagged HDR frames to SDR receivers.
 Explain fallback in plain language (“A viewer's display is in SDR”). Do not

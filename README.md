@@ -8,6 +8,9 @@ vem embutida no executável e usa o WebView2 do Windows 11. Em máquinas sem
 esse runtime, a interface Win32 abre automaticamente. Use **Tema** no topo
 para alternar entre **Escuro** e **Claro**. A preferência vale nas duas
 interfaces e é lembrada quando o app é reaberto.
+Se os controles da interface moderna não aparecerem, pressione **Alt + Espaço**
+na janela principal e escolha **Usar interface nativa**. Para voltar, escolha
+**Usar interface moderna** no mesmo menu.
 
 ## Configuração da captura
 

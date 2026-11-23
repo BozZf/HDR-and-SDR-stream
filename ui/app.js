@@ -74,6 +74,14 @@ bridge?.addEventListener('message', ({ data }) => {
     byId('audio-mode').value = String(data.mode);
     byId('audio-gain').value = String(data.gain);
     updateSliders();
+  } else if (data.type === 'present') {
+    // Wait for a paint after the host makes the browser visible.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const button = byId('start');
+      const bounds = button.getBoundingClientRect();
+      if (document.visibilityState === 'visible' && bounds.width > 0 && bounds.height > 0 &&
+          getComputedStyle(button).visibility === 'visible') send('presented');
+    }));
   } else if (data.type === 'confirm-close') {
     if (!closeDialog.open) {
       if (audioDialog.open) audioDialog.close();

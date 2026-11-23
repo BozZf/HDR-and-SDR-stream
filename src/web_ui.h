@@ -45,21 +45,32 @@ public:
         CreateCoreWebView2EnvironmentWithOptions(nullptr,profile.c_str(),nullptr,
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                 [this,host,owner,commandMessage](HRESULT result,ICoreWebView2Environment* environment) -> HRESULT {
-                    if (FAILED(result) || !environment || !IsWindow(host)) return S_OK;
+                    if (FAILED(result) || !environment || host_!=host || !IsWindow(host)) return S_OK;
                     return environment->CreateCoreWebView2Controller(host,
                         Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                             [this,host,owner,commandMessage](HRESULT result,ICoreWebView2Controller* controller) -> HRESULT {
-                                if (FAILED(result) || !controller || !IsWindow(host)) return S_OK;
+                                if (FAILED(result) || !controller || host_!=host || !IsWindow(host)) return S_OK;
                                 try { Initialize(controller,owner,commandMessage); }
                                 catch (...) { Close(); }
                                 return S_OK;
                             }).Get());
                 }).Get());
     }
-    void Resize() const {
-        if (!controller_) return;
+    bool Resize() const {
         RECT bounds{};
-        if (GetClientRect(host_,&bounds)) controller_->put_Bounds(bounds);
+        return controller_ && GetClientRect(host_,&bounds) && bounds.right>0 && bounds.bottom>0 &&
+            SUCCEEDED(controller_->put_Bounds(bounds));
+    }
+    bool SetVisible(bool visible) const {
+        return controller_ && SUCCEEDED(controller_->put_IsVisible(visible ? TRUE : FALSE));
+    }
+    void ParentMoved() const {
+        if (controller_) controller_->NotifyParentWindowPositionChanged();
+    }
+    bool Present() const {
+        if (!IsWindowVisible(host_) || !Resize()) return false;
+        ParentMoved();
+        return SetVisible(true) && SUCCEEDED(web_->PostWebMessageAsJson(L"{\"type\":\"present\"}"));
     }
     void Send(std::wstring const& message) const {
         if (web_) web_->PostWebMessageAsJson(message.c_str());
@@ -73,6 +84,7 @@ public:
         if (controller_) controller_->Close();
         web_=nullptr;
         controller_=nullptr;
+        host_=nullptr;
     }
 private:
     static constexpr wchar_t kPageUri[]=L"https://hdr-bridge.invalid/index.html";
@@ -82,6 +94,7 @@ private:
         using winrt::check_hresult;
         controller_.copy_from(controller);
         check_hresult(controller_->get_CoreWebView2(web_.put()));
+        check_hresult(controller_->put_IsVisible(FALSE));
         winrt::com_ptr<ICoreWebView2Settings> settings;
         check_hresult(web_->get_Settings(settings.put()));
         check_hresult(settings->put_AreHostObjectsAllowed(FALSE));

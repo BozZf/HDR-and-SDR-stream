@@ -33,10 +33,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.1]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.2]')
     needs: windows
     runs-on: ubuntu-latest
-    concurrency: hdr-bridge-v1.0.1
+    concurrency: hdr-bridge-v1.0.2
     permissions:
       contents: write
     steps:
@@ -48,21 +48,23 @@ jobs:
         with:
           name: HdrBridge-windows-x64-with-audio
           path: with-audio
-      - name: Package and publish v1.0.1
+      - name: Package and publish v1.0.2
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           test -f portable/HdrBridge.exe
           test -f portable/WebView2-LICENSE.txt
           test -f with-audio/VB-CABLE/VBCABLE_Setup_x64.exe
-          (cd portable && zip -qr ../HdrBridge-1.0.1-windows-x64.zip .)
-          (cd with-audio && zip -qr ../HdrBridge-1.0.1-windows-x64-with-audio.zip .)
-          sha256sum HdrBridge-1.0.1-*.zip > SHA256SUMS.txt
-          gh release create v1.0.1 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title 'HDR Bridge 1.0.1' --latest --notes-file - \
-            HdrBridge-1.0.1-windows-x64.zip HdrBridge-1.0.1-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
+          (cd portable && zip -qr ../HdrBridge-1.0.2-windows-x64.zip .)
+          (cd with-audio && zip -qr ../HdrBridge-1.0.2-windows-x64-with-audio.zip .)
+          sha256sum HdrBridge-1.0.2-*.zip > SHA256SUMS.txt
+          gh release create v1.0.2 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'HDR Bridge 1.0.2' --latest --notes-file - \
+            HdrBridge-1.0.2-windows-x64.zip HdrBridge-1.0.2-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
           HDR Bridge para Windows 11 x64.
 
+          - Correção para controles que desapareciam ao abrir. A interface nativa fica disponível se a página não puder ser exibida.
+          - Alt + Espaço abre o menu para escolher a interface nativa ou moderna.
           - Seletor de tema Escuro ou Claro com preferência salva, também na interface Win32.
           - O X da janela principal pergunta se você quer minimizar para a bandeja ou sair e permite salvar a escolha.
           - Aviso de desempenho ao selecionar o modo SDR de compatibilidade GDI.

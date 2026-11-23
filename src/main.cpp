@@ -37,7 +37,8 @@ using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2, kWebCommand = WM_APP + 3;
-constexpr UINT_PTR kCloseDialogTimer=1;
+constexpr UINT_PTR kCloseDialogTimer=1, kWebStartupTimer=2;
+constexpr UINT kSwitchUi=0x1f00;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
@@ -97,7 +98,7 @@ struct App {
     bridge::WebUi web;
     bridge::NativeTheme theme;
     HWND webHost{},themeBox{};
-    bool webActive=false;
+    bool webActive=false, webPresenting=false;
     std::wstring videoStatusText=L"Parado. Escolha a janela ou monitor de origem.", audioStatusText;
     CloseChoice closeChoice=CloseChoice::Ask;
     bool confirmingClose=false;
@@ -716,9 +717,12 @@ struct App {
         web.Send(message);
     }
     void StartWebUi() {
+        if (webHost) return;
         webHost=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
             0,0,1,1,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (!webHost) return;
+        SetTimer(controls,kWebStartupTimer,15000,nullptr);
+        UpdateUiMenu();
         ResizeWebUi();
         web.Start(webHost,controls,kWebCommand);
     }
@@ -727,16 +731,23 @@ struct App {
         RECT area{};
         GetClientRect(controls,&area);
         if (area.right>0 && area.bottom>0) {
-            SetWindowPos(webHost,HWND_BOTTOM,0,0,area.right,area.bottom,SWP_NOACTIVATE);
+            SetWindowPos(webHost,nullptr,0,0,area.right,area.bottom,SWP_NOZORDER|SWP_NOACTIVATE);
             web.Resize();
         }
     }
+    void PresentWebUi() {
+        if (!webHost || webPresenting || webActive) return;
+        ResizeWebUi();
+        UpdateThemeBackground();
+        webPresenting=true;
+        if (!SetWindowPos(webHost,HWND_BOTTOM,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW) ||
+            !web.Present()) UseNativeUi();
+    }
     void ActivateWebUi() {
-        if (webActive) return;
+        if (!webPresenting) return;
+        webPresenting=false;
+        KillTimer(controls,kWebStartupTimer);
         webActive=true;
-        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
-            if (child!=webHost) ShowWindow(child,SW_HIDE);
-        }
         auto style=GetWindowLongPtrW(controls,GWL_STYLE);
         SetWindowLongPtrW(controls,GWL_STYLE,style|WS_THICKFRAME|WS_MAXIMIZEBOX);
         auto dpi=GetDpiForWindow(controls);
@@ -748,8 +759,10 @@ struct App {
         }
         SetWindowPos(controls,nullptr,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
         ResizeWebUi();
-        UpdateThemeBackground();
-        ShowWindow(webHost,SW_SHOWNA);
+        SetWindowPos(webHost,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
+            if (child!=webHost) ShowWindow(child,SW_HIDE);
+        }
         PublishWebState();
         SendText(L"status",videoStatusText);
         SendText(L"audio-status",audioStatusText.empty() ? L"Áudio desligado" : audioStatusText);
@@ -769,17 +782,39 @@ struct App {
         if (!SaveSetting(L"Theme",static_cast<DWORD>(choice)))
             MessageBoxW(controls,L"Não foi possível salvar o tema para a próxima abertura.",L"HDR Bridge",MB_ICONWARNING);
     }
+    void UpdateUiMenu() const {
+        auto menu=GetSystemMenu(controls,FALSE);
+        RemoveMenu(menu,kSwitchUi,MF_BYCOMMAND);
+        InsertMenuW(menu,SC_CLOSE,MF_BYCOMMAND|MF_STRING,kSwitchUi,
+            webHost ? L"Usar interface nativa" : L"Usar interface moderna");
+    }
+    void ToggleUi() {
+        if (webHost) {
+            SaveSetting(L"NativeUi",1);
+            UseNativeUi();
+        } else {
+            SaveSetting(L"NativeUi",0);
+            StartWebUi();
+        }
+    }
     void UseNativeUi() {
+        KillTimer(controls,kWebStartupTimer);
+        webPresenting=false;
         web.Close();
+        if (webHost) DestroyWindow(webHost);
+        webHost=nullptr;
+        UpdateUiMenu();
         if (!webActive) return;
         webActive=false;
         confirmingClose=false;
-        ShowWindow(webHost,SW_HIDE);
         SetWindowPos(preview,nullptr,20,400,320,180,SWP_NOZORDER|SWP_NOACTIVATE);
         for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
-            if (child!=webHost) ShowWindow(child,SW_SHOWNA);
+            ShowWindow(child,SW_SHOWNA);
         }
-        SetWindowPos(controls,nullptr,0,0,740,690,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
+        if (IsZoomed(controls)) ShowWindow(controls,SW_RESTORE);
+        auto style=GetWindowLongPtrW(controls,GWL_STYLE);
+        SetWindowLongPtrW(controls,GWL_STYLE,style & ~(WS_THICKFRAME|WS_MAXIMIZEBOX));
+        SetWindowPos(controls,nullptr,0,0,740,690,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
     }
     void ApplyPreviewLayout(std::span<int const,4> values) {
         auto x=values[0],y=values[1],width=values[2],height=values[3];
@@ -837,7 +872,8 @@ struct App {
         FinishClose(button==kShow ? CloseChoice::Minimize : button==kExit ? CloseChoice::Exit : CloseChoice::Ask,remember!=FALSE);
     }
     void WebCommand(std::wstring_view message) {
-        if (message==L"ready") { ActivateWebUi(); return; }
+        if (message==L"ready") { PresentWebUi(); return; }
+        if (message==L"presented") { ActivateWebUi(); return; }
         if (!webActive) return;
         auto text=to_string(message);
         std::string_view command=text;
@@ -1018,7 +1054,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             case WM_DISPLAYCHANGE: if (app.sourceBox) app.RefreshSources(); return 0;
             case kClosed: if (wparam == app.generation) app.Stop(); return 0;
             case WM_CLOSE: app.ConfirmClose(); return 0;
-            case WM_TIMER: if (wparam==kCloseDialogTimer) { app.Tick(); return 0; } break;
+            case WM_TIMER:
+                if (wparam==kCloseDialogTimer) { app.Tick(); return 0; }
+                if (wparam==kWebStartupTimer) { if (!app.webActive) app.UseNativeUi(); return 0; }
+                break;
+            case WM_SYSCOMMAND:
+                if (wparam==kSwitchUi) { app.ToggleUi(); return 0; }
+                break;
+            case WM_SHOWWINDOW:
+                if (app.webActive || app.webPresenting) app.web.SetVisible(wparam!=0);
+                break;
+            case WM_MOVE: app.web.ParentMoved(); break;
             case WM_SIZE:
                 if (wparam==SIZE_MINIMIZED) ShowWindow(hwnd,SW_HIDE);
                 else app.ResizeWebUi();
@@ -1117,7 +1163,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         if (!app.frameTimer) app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,0,TIMER_ALL_ACCESS);
         if (!app.frameTimer) throw_last_error();
         app.InitGraphics(); app.InitUI(); app.FitOutputWindow(); ShowWindow(app.controls,SW_SHOW);
-        app.StartWebUi();
+        app.UpdateUiMenu();
+        if (!ReadSetting(L"NativeUi",1)) app.StartWebUi();
         bool quitting=false;
         while (!quitting) {
             DWORD event=MsgWaitForMultipleObjectsEx(1,&app.frameTimer,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);

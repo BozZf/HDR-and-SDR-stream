@@ -11,19 +11,18 @@ public:
     void Reset() {
         view_=nullptr; target_=nullptr; texture_=nullptr; extent_={};
     }
-    void Ensure(ID3D11Device* device, Extent size, bool hdr) {
-        auto format=hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
-        if (texture_ && extent_.width==size.width && extent_.height==size.height && format_==format) return;
+    void Ensure(ID3D11Device* device, Extent size) {
+        if (texture_ && extent_.width==size.width && extent_.height==size.height) return;
         Reset();
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width=size.width; desc.Height=size.height;
         desc.MipLevels=desc.ArraySize=1; desc.SampleDesc.Count=1;
-        desc.Format=format; desc.Usage=D3D11_USAGE_DEFAULT;
+        desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM; desc.Usage=D3D11_USAGE_DEFAULT;
         desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
         winrt::check_hresult(device->CreateTexture2D(&desc,nullptr,texture_.put()));
         winrt::check_hresult(device->CreateRenderTargetView(texture_.get(),nullptr,target_.put()));
         winrt::check_hresult(device->CreateShaderResourceView(texture_.get(),nullptr,view_.put()));
-        extent_=size; format_=format;
+        extent_=size;
     }
     void Process(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source,
         Extent sourceSize, ID3D11VertexShader* vertex, ID3D11PixelShader* color,
@@ -63,7 +62,6 @@ private:
         context->OMSetRenderTargets(0,nullptr,nullptr);
     }
     Extent extent_{};
-    DXGI_FORMAT format_=DXGI_FORMAT_UNKNOWN;
     winrt::com_ptr<ID3D11Texture2D> texture_;
     winrt::com_ptr<ID3D11RenderTargetView> target_;
     winrt::com_ptr<ID3D11ShaderResourceView> view_;

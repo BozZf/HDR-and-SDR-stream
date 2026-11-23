@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(HdrBridge VERSION 1.0.5 LANGUAGES CXX)
+project(HdrBridge VERSION 1.0.6 LANGUAGES CXX)
 if(NOT WIN32 OR NOT MSVC)
   message(FATAL_ERROR "Use Windows 11 + Visual Studio 2022 (C++ desktop workload and Windows SDK).")
 endif()

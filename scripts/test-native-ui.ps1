@@ -44,7 +44,10 @@ try {
     if ($notice -eq [IntPtr]::Zero -or [NativeUi]::IsWindowVisible($notice)) {
         throw 'The GDI warning should exist and be hidden before selecting GDI.'
     }
-    $null = [NativeUi]::SendMessage($mode, 0x014E, [IntPtr]2, [IntPtr]::Zero) # CB_SETCURSEL
+    if ([NativeUi]::SendMessage($mode, 0x0146, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32() -ne 2) { # CB_GETCOUNT
+        throw 'Only the two SDR output modes should be available.'
+    }
+    $null = [NativeUi]::SendMessage($mode, 0x014E, [IntPtr]1, [IntPtr]::Zero) # CB_SETCURSEL
     $null = [NativeUi]::PostMessage($window, 0x0111, [IntPtr](0x10000 + 102), $mode) # CBN_SELCHANGE
     $deadline = [DateTime]::UtcNow.AddSeconds(5)
     while (-not [NativeUi]::IsWindowVisible($notice) -and [DateTime]::UtcNow -lt $deadline) {
@@ -57,7 +60,8 @@ try {
     $null = [NativeUi]::SendMessage($kind, 0x014E, [IntPtr]0, [IntPtr]::Zero)
     $null = [NativeUi]::PostMessage($window, 0x0111, [IntPtr](0x10000 + 108), $kind)
     $null = [NativeUi]::SendMessage($mode, 0x014E, [IntPtr]0, [IntPtr]::Zero)
-    $null = [NativeUi]::PostMessage($window, 0x0111, [IntPtr](0x10000 + 102), $mode)
+    $null = [NativeUi]::SendMessage($window, 0x0111, [IntPtr](0x10000 + 102), $mode)
+    if ([NativeUi]::IsWindowVisible($notice)) { throw 'The GDI warning did not hide after returning to GPU output.' }
     $null = [NativeUi]::PostMessage($window, 0x0111, [IntPtr]100, [IntPtr]::Zero) # Start capture
     $null = [NativeUi]::PostMessage($window, 0x0111, [IntPtr]106, [IntPtr]::Zero) # Open output
     $output = [NativeUi]::FindWindow('HdrBridgeOutput', 'HDR Bridge - Saida SDR')

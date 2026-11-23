@@ -2,14 +2,12 @@
 Texture2D<float4> source : register(t0);
 SamplerState linearSampler : register(s0);
 cbuffer Settings : register(b0) {
-    float hdrOutput;
     float exposureEV;
     float referenceWhiteNits;
     float shoulderStart;
 };
 struct Vertex { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
-// Processed SDR is already gamma encoded, and HDR is already linear scRGB.
-// Present either unchanged; applying PS again would tone-map SDR twice.
+// The processed SDR frame is already gamma encoded. Present it unchanged.
 float4 DisplayPS(Vertex v) : SV_TARGET {
     return float4(source.Sample(linearSampler, v.uv).rgb, 1);
 }
@@ -26,8 +24,6 @@ float3 encodeSRGB(float3 c) {
 }
 float4 PS(Vertex v) : SV_TARGET {
     float3 captured = source.Sample(linearSampler, v.uv).rgb;
-    // HDR mode is linear scRGB passthrough, including extended/negative values.
-    if (hdrOutput > 0.5) return float4(captured, 1);
     float3 rgb = max(captured, 0) * (80.0 / referenceWhiteNits) * exp2(exposureEV);
     float y = dot(rgb, float3(0.2126, 0.7152, 0.0722));
     float k = shoulderStart;

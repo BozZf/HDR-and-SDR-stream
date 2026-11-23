@@ -35,10 +35,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.5]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.6]')
     needs: windows
     runs-on: ubuntu-latest
-    concurrency: hdr-bridge-v1.0.5
+    concurrency: hdr-bridge-v1.0.6
     permissions:
       contents: write
     steps:
@@ -50,21 +50,22 @@ jobs:
         with:
           name: HdrBridge-windows-x64-with-audio
           path: with-audio
-      - name: Package and publish v1.0.5
+      - name: Package and publish v1.0.6
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           test -f portable/HdrBridge.exe
           test -f portable/LICENSE
           test -f with-audio/VB-CABLE/VBCABLE_Setup_x64.exe
-          (cd portable && zip -qr ../HdrBridge-1.0.5-windows-x64.zip .)
-          (cd with-audio && zip -qr ../HdrBridge-1.0.5-windows-x64-with-audio.zip .)
-          sha256sum HdrBridge-1.0.5-*.zip > SHA256SUMS.txt
-          gh release create v1.0.5 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title 'HDR Bridge 1.0.5' --latest --notes-file - \
-            HdrBridge-1.0.5-windows-x64.zip HdrBridge-1.0.5-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
+          (cd portable && zip -qr ../HdrBridge-1.0.6-windows-x64.zip .)
+          (cd with-audio && zip -qr ../HdrBridge-1.0.6-windows-x64-with-audio.zip .)
+          sha256sum HdrBridge-1.0.6-*.zip > SHA256SUMS.txt
+          gh release create v1.0.6 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'HDR Bridge 1.0.6' --latest --notes-file - \
+            HdrBridge-1.0.6-windows-x64.zip HdrBridge-1.0.6-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
           HDR Bridge para Windows 11 x64.
 
+          - O Bridge converte fontes HDR para SDR e oferece duas saídas SDR, via GPU ou GDI.
           - A barra local da saída acompanha o tema da Bridge, com cantos arredondados e realce nos botões.
           - Botões da janela principal e da saída usam o mesmo fundo, borda e arredondamento dos seletores em ambos os temas.
           - Seletor de tema Escuro ou Claro com preferência salva.

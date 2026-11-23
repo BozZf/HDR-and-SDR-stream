@@ -73,8 +73,8 @@ int main() {
         auto srv=image.get(); context->PSSetShaderResources(0,1,&srv);
         auto smp=sampler.get(); context->PSSetSamplers(0,1,&smp);
         auto cb=settings.get(); context->PSSetConstantBuffers(0,1,&cb);
-        auto render = [&](float hdr, float ev, float white) {
-            float values[4]={hdr,ev,white,0.65f};
+        auto render = [&](float ev, float white) {
+            float values[4]={ev,white,0.65f,0.0f};
             context->UpdateSubresource(settings.get(),0,nullptr,values,0,0);
             context->Draw(3,0);
             context->CopyResource(staging.get(),output.get());
@@ -85,7 +85,7 @@ int main() {
             context->Unmap(staging.get(),0);
             return result;
         };
-        auto sdr=render(0,0,203);
+        auto sdr=render(0,203);
         for (auto const& p : sdr) for (float channel : p)
             Require(std::isfinite(channel) && channel>=-1e-5f && channel<=1.00001f,"SDR must be finite and bounded");
         Require(std::abs(sdr[0][0])<1e-6f,"Black must remain black");
@@ -94,13 +94,10 @@ int main() {
             Require(std::abs(sdr[i][0]-sdr[i][1])<1e-5f && std::abs(sdr[i][1]-sdr[i][2])<1e-5f,"Neutral must remain neutral");
         }
         Require(sdr[128][0]>sdr[64][0]+0.01f,"HDR highlights must retain separation");
-        auto bright=render(0,1,203), dim=render(0,-1,203), highWhite=render(0,0,400);
+        auto bright=render(1,203), dim=render(-1,203), highWhite=render(0,400);
         Require(bright[16][0]>sdr[16][0] && dim[16][0]<sdr[16][0],"Exposure control must work");
         Require(highWhite[16][0]<sdr[16][0],"Reference white must scale SDR brightness");
-        auto hdr=render(1,2,400);
-        for (size_t i=0;i<input.size();++i) for (int c=0;c<3;++c)
-            Require(std::abs(hdr[i][c]-input[i][c])<0.0001f,"HDR passthrough must preserve linear extended values");
-        std::cout << "PASS: production HLSL, SDR range, black, monotonicity, neutrals, highlights, controls, HDR passthrough\n";
+        std::cout << "PASS: HDR-to-SDR production HLSL, SDR range, black, monotonicity, neutrals, highlights, controls\n";
         return 0;
     } catch (winrt::hresult_error const& e) {
         std::wcerr << e.message().c_str() << L'\n'; return 1;

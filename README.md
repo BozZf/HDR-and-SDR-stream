@@ -1,8 +1,8 @@
 # HDR-and-SDR-stream / HDR Bridge
 
 Aplicativo nativo para Windows 11 que captura uma janela ou monitor em FP16 HDR e
-oferece saída SDR com tone mapping na GPU ou HDR scRGB local, mantendo o HDR do
-monitor ligado. A interface nativa organiza os ajustes de captura e a prévia em
+converte a imagem para SDR com tone mapping na GPU, mantendo o HDR do monitor
+ligado. A interface nativa organiza os ajustes de captura e a prévia em
 dois painéis e usa os temas **Escuro** e **Claro** do seletor **Tema**. A preferência
 é lembrada quando o app é reaberto. A interface usa os componentes do Windows.
 
@@ -15,12 +15,12 @@ dois painéis e usa os temas **Escuro** e **Claro** do seletor **Tema**. A prefe
 | Taxa de quadros | Alvo de 30 ou 60 fps, temporizador de alta resolução e prazos absolutos para evitar acumular o tempo de renderização. |
 | Monitor | Lista cada monitor ativo, identificador `DISPLAY`, resolução e indicação de principal. |
 | Aplicativo | Lista janelas visíveis por título e PID; selecione uma janela do aplicativo. |
-| Cor | SDR GPU, HDR scRGB local ou SDR de compatibilidade GDI para outros capturadores. |
+| Modo de saída | SDR com tone mapping (GPU) ou SDR de compatibilidade GDI. |
 | Áudio | Aplicativo capturado (árvore de processos) ou sistema, com volume e destino selecionável; desligado por padrão. |
-| Ajustes SDR | Exposição e branco de referência manual; desabilitados em HDR. |
+| Ajustes SDR | Exposição e branco de referência manual nos dois modos de saída. |
 
 A origem só muda ao clicar em **Iniciar captura** ou **Trocar origem**. Resolução,
-fps e modo de cor podem mudar durante a captura. **Atualizar** busca janelas
+fps e modo de saída podem mudar durante a captura. **Atualizar** busca janelas
 abertas e monitores conectados. O programa rejeita uma janela fechada ou monitor removido
 antes de iniciar. O status mostra a origem ativa, a configuração do quadro e se a saída para o
 Discord está aberta. Fechar essa saída não encerra a captura nem a prévia.
@@ -60,12 +60,13 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
 
 1. Mantenha HDR ativo no Windows e no conteúdo desejado.
 2. Escolha **Monitor** e qual monitor, ou **Aplicativo (janela)** e a janela.
-3. Escolha **720p/1080p**, **30/60 fps** e **SDR/HDR**.
+3. Escolha **720p/1080p** e **30/60 fps**. Use **SDR · Tone mapping** ou
+   **SDR · Compatibilidade GDI** se o serviço não conseguir capturar a saída padrão.
 4. Clique em **Iniciar captura**. A imagem aparece na prévia pequena
    dentro do app. Nenhuma janela grande é aberta automaticamente.
-5. Quando quiser compartilhar, clique em **Abrir saída**. Para amigos
-   com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
-   Ajuste a qualidade também no próprio serviço.
+5. Clique em **Abrir saída** e compartilhe a janela **HDR Bridge - Saida SDR**.
+   No modo GDI, selecione **HDR Bridge - Saida SDR - Compatibilidade**. Ajuste
+   a qualidade também no próprio serviço.
 6. Passe o mouse no **canto superior direito** da saída para mostrar seus
    controles locais, que acompanham a escolha em **Tema**. Use **Recolher** para
    colocar a janela atrás das outras sem suspender o vídeo. O mesmo comando está
@@ -217,20 +218,15 @@ anexe o código/ZIP do outro app, o arquivo de dependências, os passos de
 reprodução e indique se a prévia local e a janela de saída mostram a imagem.
 Não são necessários senhas, tokens, arquivos de contas ou `node_modules`.
 
-## HDR e SDR
+## Conversão de HDR para SDR
 
-A captura interna é sempre FP16 scRGB para não perder altas luzes antes da
-conversão. O seletor controla **o tratamento da saída**, não o formato do monitor:
+A captura usa FP16 scRGB para preservar as altas luzes antes do tone mapping.
+O Bridge aplica os ajustes de exposição e branco de referência, comprime a
+luminância e a saturação e gera uma imagem SDR em BGRA8 com curva sRGB. O modo
+normal apresenta essa imagem via Direct3D e o modo de compatibilidade via GDI.
 
-- **SDR:** ajuste de exposição/branco, compressão de luminância e saturação, curva
-  sRGB e saída BGRA8 SDR.
-- **HDR local:** preserva valores lineares scRGB, inclusive valores estendidos,
-  em saída FP16. Não implementa encoder HDR10/PQ ou transmissão HDR pela rede.
-
-Selecionar HDR não torna um serviço ou receptor compatível com HDR. A proposta
-de integração do branch `discord-proposal` trata da negociação e fallback.
-A janela intermediária SDR ainda precisa ser testada no caminho de captura real
-do serviço; não há garantia de que ele não aplique outra conversão de cor.
+Para transmitir em HDR, compartilhe o próprio jogo ou aplicativo em um serviço
+que ofereça suporte à transmissão HDR.
 
 ## Limitações atuais
 
@@ -258,7 +254,7 @@ do serviço; não há garantia de que ele não aplique outra conversão de cor.
   aplicativo mais proposta em inglês e política HDR/SDR testável. Nada foi enviado ao Discord.
 
 `PreviewPipelineTests` executa o processamento e a exibição reais no D3D11 WARP,
-com quadros 720p/1080p em SDR/HDR e miniaturas de dois tamanhos. Verifica que os
+com entrada FP16, quadros SDR em 720p/1080p e miniaturas de dois tamanhos. Verifica que os
 pixels e dimensões do quadro completo não mudam, que a prévia não aplica tone
 mapping novamente e que o conteúdo pode ser apagado.
 
@@ -269,7 +265,7 @@ manual em um PC Windows com os dispositivos de destino. O teste de prévia tamb�
 verifica os pixels da leitura GDI e rejeita interpretar HDR como SDR.
 
 `ColorPipelineTests` executa o HLSL de produção no Direct3D WARP e testa a faixa
-SDR, neutralidade, altas luzes, exposição e preservação HDR. `StreamSettingsTests`
+SDR, neutralidade, altas luzes e os ajustes de exposição e branco de referência. `StreamSettingsTests`
 testa dimensões, proporção e temporização sem acumular atraso de renderização.
 Este segundo teste também pode ser executado em Linux:
 

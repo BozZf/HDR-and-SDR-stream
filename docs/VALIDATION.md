@@ -9,7 +9,7 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 | SDR e HDR no Windows | Lista de monitores/janelas e botão Iniciar capturam a origem selecionada. |
 | Jogo HDR → saída SDR | Sol, nuvens e UI preservam detalhes; sem branco estourado generalizado. |
 | Discord → amigo SDR | Amigo vê a saída SDR e confirma brilho/contraste; comparar com transmissão original. |
-| Trocar SDR ↔ HDR | Sem travamento; estado de HDR local explícito; HDR não prometido na rede. |
+| Trocar o modo de saída | SDR via GPU ou GDI, com aviso de desempenho ao selecionar GDI. |
 | Exposição/branco | Alteram apenas SDR, inclusive em origem estática. |
 | Redimensionar origem | Sem distorção; barras pretas mantêm proporção e saída conserva 720p/1080p. |
 | Fechar origem | Captura para e saída some, sem continuar exibindo o último frame. |
@@ -42,7 +42,7 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - Abrir/fechar saída para Discord: mesma imagem processada, sem mudança de origem
   ou cor; fechar pelo X não para a prévia.
 - Executar `PreviewPipelineTests`: miniaturas 320×180/480×270 não alteram textura
-  720p/1080p, SDR não recebe uma segunda conversão e HDR preserva valores.
+  720p/1080p, a entrada FP16 é convertida para SDR e a prévia mantém as cores do quadro.
 - Ocultar controles durante compartilhamento: saída continua atualizando.
 - Ambos os visores ocultos/minimizados: processamento pausa, retoma ao restaurar.
 - Trocar 720p/1080p durante captura: conferir back buffer e área cliente de saída
@@ -52,7 +52,8 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
 - Lista de aplicativos: janela correta, títulos repetidos diferenciados por PID,
   atualização após abrir/fechar apps e rejeição de origem obsoleta.
 - Alterar seleção sem iniciar: origem ativa não muda silenciosamente.
-- Trocar SDR/HDR em ambas as resoluções e taxas; ajustes SDR continuam funcionando.
+- Trocar entre SDR via GPU e GDI em ambas as resoluções e taxas. Verificar que a
+  exposição e o branco de referência continuam funcionando.
 - Executar `StreamSettingsTests`: dimensões, aspecto, prazos e descarte de atrasos.
 
 ## Áudio e compatibilidade (validação manual necessária)

@@ -82,7 +82,7 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
 struct App {
     HWND controls{}, output{}, outputToolbar{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
-    bool hdr = false, running = false, gdiOutput = false;
+    bool running = false, gdiOutput = false;
     bool outputLowered = false;
     bridge::NativeTheme theme;
     HWND themeBox{}, previewEmpty{}, gdiNotice{}, captureState{};
@@ -417,14 +417,14 @@ struct App {
         if (!swap) {
             DXGI_SWAP_CHAIN_DESC1 desc{};
             desc.Width = width; desc.Height = height;
-            desc.Format = hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+            desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
             desc.SampleDesc.Count = 1; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
             desc.BufferCount = 2; desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             desc.Scaling = DXGI_SCALING_STRETCH; desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
             check_hresult(factory->CreateSwapChainForHwnd(device.get(), destination, &desc, nullptr, nullptr, swap.put()));
             check_hresult(factory->MakeWindowAssociation(destination, DXGI_MWA_NO_ALT_ENTER));
             auto swap3 = swap.as<IDXGISwapChain3>();
-            auto space = hdr ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+            constexpr auto space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
             UINT support = 0;
             check_hresult(swap3->CheckColorSpaceSupport(space, &support));
             if (!(support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))
@@ -516,8 +516,7 @@ struct App {
     void UpdateStatus() {
         if (!running) return;
         std::wstring text = L"Origem: "; text += item.DisplayName().c_str();
-        text += hdr ? L"\r\nHDR scRGB local. A transmissão depende do serviço."
-                    : gdiOutput ? L"\r\nSDR compatível (GDI; maior uso de CPU)." : L"\r\nSDR com tone mapping.";
+        text += gdiOutput ? L"\r\nSDR compatível (GDI; maior uso de CPU)." : L"\r\nSDR com tone mapping.";
         if (IsIconic(output)) text+=L"\r\nSaída minimizada. Restaure para compartilhar.";
         else if (outputLowered) text+=L"\r\nSaída atrás das janelas. Vídeo ativo.";
         else if (IsWindowVisible(output)) text+=L"\r\nJanela de saída aberta.";
@@ -526,7 +525,7 @@ struct App {
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
         Status(text);
-        SetWindowTextW(output,hdr ? L"HDR Bridge - Saida HDR local" : gdiOutput ? L"HDR Bridge - Saida SDR - Compatibilidade" : L"HDR Bridge - Saida SDR");
+        SetWindowTextW(output,gdiOutput ? L"HDR Bridge - Saida SDR - Compatibilidade" : L"HDR Bridge - Saida SDR");
     }
     void RefreshCaptureControls() const {
         if (!captureState) return;
@@ -578,8 +577,8 @@ struct App {
         }
         if (!image) return;
         auto extent=bridge::OutputExtent(resolution);
-        programFrame.Ensure(device.get(),extent,hdr);
-        float values[4]={hdr ? 1.0f : 0.0f,exposure,white,0.65f};
+        programFrame.Ensure(device.get(),extent);
+        float values[4]={exposure,white,0.65f,0.0f};
         context->UpdateSubresource(constants.get(),0,nullptr,values,0,0);
         programFrame.Process(context.get(),image.get(),{imageWidth,imageHeight},
             vs.get(),ps.get(),sampler.get(),constants.get());
@@ -732,10 +731,9 @@ struct App {
         SendMessageW(rateBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"30 fps"));
         SendMessageW(rateBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"60 fps"));
         SendMessageW(rateBox,CB_SETCURSEL,0,0);
-        Child(L"STATIC",L"Cor da saída",0,0,0,1,30,kModeLabel);
+        Child(L"STATIC",L"Modo de saída",0,0,0,1,30,kModeLabel);
         modeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kMode);
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR · Tone mapping"));
-        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"HDR · scRGB local"));
         SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR · Compatibilidade GDI"));
         SendMessageW(modeBox,CB_SETCURSEL,0,0);
         gdiNotice=Child(L"STATIC",L"GDI usa mais CPU e pode reduzir a fluidez.",SS_CENTERIMAGE,0,0,1,30,kGdiNotice);
@@ -870,10 +868,8 @@ struct App {
         if ((id == kLowerOutput || id == kLowerToolbar) && running) LowerOutput();
         if (id == kExit) { Stop(); DestroyWindow(controls); return; }
         if (id == kMode && event == CBN_SELCHANGE) {
-            auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
-            hdr=selected==1; gdiOutput=selected==2;
+            gdiOutput=SendMessageW(modeBox,CB_GETCURSEL,0,0)==1;
             if (session) session.IsCursorCaptureEnabled(!gdiOutput);
-            EnableWindow(exposureSlider,!hdr); EnableWindow(whiteSlider,!hdr);
             ShowWindow(gdiNotice,gdiOutput ? SW_SHOWNA : SW_HIDE);
             LayoutMain();
             ReleaseSwap(); UpdateStatus();

@@ -32,7 +32,8 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
   de confirmação do app.
 - Verificar a interface em escalas de 100% e 150%, incluindo prévia, teclado,
   lista de fontes, modal do áudio e aviso GDI. A prévia deve ceder espaço às
-  caixas de diálogo. Verificar o caminho Win32 com WebView2 indisponível.
+  caixas de diálogo. Confirmar que os controles continuam visíveis ao abrir e
+  restaurar a janela, e que o tema escolhido é mantido ao reabrir.
 
 - Iniciar captura: só a prévia de 320×180 abre dentro da janela principal; nenhuma
   saída grande é exibida automaticamente.

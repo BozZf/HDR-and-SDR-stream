@@ -20,14 +20,11 @@
 #include <cwchar>
 #include <vector>
 #include <chrono>
-#include <charconv>
-#include <span>
 #include "stream_settings.h"
 #include "video_frame.h"
 #include "audio_bridge.h"
 #include "sdr_readback.h"
 #include "shader_source.h"
-#include "web_ui.h"
 #include "native_theme.h"
 
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -36,15 +33,20 @@ using namespace winrt;
 using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
-constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2, kWebCommand = WM_APP + 3;
-constexpr UINT_PTR kCloseDialogTimer=1, kWebStartupTimer=2;
-constexpr UINT kSwitchUi=0x1f00;
+constexpr UINT kClosed = WM_APP + 1, kTray = WM_APP + 2;
+constexpr UINT_PTR kCloseDialogTimer=1;
 constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kWhite = 104, kRate = 105, kShow = 106, kExit = 107,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
               kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
               kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118, kLowerOutput = 119,
               kLowerToolbar = 120, kResetClose = 121, kTheme = 122;
+enum MainControl {
+    kTitle=200, kThemeLabel, kCaptureHeading, kKindLabel, kSourceLabel, kResolutionLabel,
+    kRateLabel, kModeLabel, kExposureLabel, kWhiteLabel, kPreviewHeading, kPreviewEmpty,
+    kVideoStatus, kAudioSummary, kGdiNotice, kCaptureState
+};
+constexpr int kMainWidth=880, kMainHeight=574;
 
 enum class CloseChoice : DWORD { Ask, Minimize, Exit };
 constexpr wchar_t kSettingsKey[]=L"Software\\HDR Bridge";
@@ -65,20 +67,6 @@ bool SaveSetting(wchar_t const* name,DWORD value) {
     return result==ERROR_SUCCESS;
 }
 
-bool ParseValues(std::string_view input,std::span<int> values) {
-    for (auto& value : values) {
-        if (input.empty()) return false;
-        auto end=input.data()+input.size();
-        auto result=std::from_chars(input.data(),end,value);
-        if (result.ec!=std::errc{}) return false;
-        bool last=&value==&values.back();
-        if (last) return result.ptr==end;
-        if (result.ptr==end || *result.ptr!=':') return false;
-        input.remove_prefix(static_cast<size_t>(result.ptr-input.data())+1);
-    }
-    return input.empty();
-}
-
 com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     com_ptr<ID3DBlob> blob, errors;
     HRESULT hr = D3DCompile(kColorShader, sizeof(kColorShader)-1, nullptr, nullptr,
@@ -95,11 +83,10 @@ struct App {
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
     bool hdr = false, running = false, gdiOutput = false;
     bool outputLowered = false;
-    bridge::WebUi web;
     bridge::NativeTheme theme;
-    HWND webHost{},themeBox{};
-    bool webActive=false, webPresenting=false;
-    std::wstring videoStatusText=L"Parado. Escolha a janela ou monitor de origem.", audioStatusText;
+    HWND themeBox{}, previewEmpty{}, gdiNotice{}, captureState{};
+    RECT capturePanel{}, previewPanel{};
+    std::wstring audioStatusText;
     CloseChoice closeChoice=CloseChoice::Ask;
     bool confirmingClose=false;
     HWND outputToolbarTitle{},outputToolbarLower{},outputToolbarClose{};
@@ -154,7 +141,6 @@ struct App {
             audioStatusText=text;
             if (audioSummary) SetWindowTextW(audioSummary,text.c_str());
             if (audioStatus) SetWindowTextW(audioStatus,text.c_str());
-            if (webActive) SendText(L"audio-status",text);
         }
     }
     void ApplyAudio() {
@@ -333,7 +319,6 @@ struct App {
         if (!sources.empty()) SendMessageW(sourceBox,CB_SETCURSEL,selection,0);
         EnableWindow(GetDlgItem(controls,kPick),!sources.empty());
         if (sources.empty() && !running) Status(L"Nenhuma origem disponível. Abra o aplicativo e clique em Atualizar.");
-        PublishWebState();
     }
     UINT generation = 0, fps = 30;
     float exposure = 0, white = 203;
@@ -359,9 +344,7 @@ struct App {
     event_token closedToken{};
 
     void Status(std::wstring const& message) {
-        videoStatusText=message;
         SetWindowTextW(status,message.c_str());
-        if (webActive) SendText(L"status",message);
     }
     void Fail(hresult_error const& error) {
         Stop();
@@ -459,8 +442,8 @@ struct App {
         EnableWindow(GetDlgItem(controls,kShow),FALSE);
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
+        RefreshCaptureControls();
         Status(L"Parado. Escolha a janela ou monitor de origem.");
-        PublishWebState();
     }
     void StartSelected() {
         auto selected=SendMessageW(sourceBox,CB_GETCURSEL,0,0);
@@ -504,6 +487,7 @@ struct App {
         activeSourceWindow=source.window;
         RestartAudio();
         EnableWindow(GetDlgItem(controls,kShow),TRUE);
+        RefreshCaptureControls();
         ArmTimer(true);
         UpdateStatus();
     }
@@ -520,8 +504,16 @@ struct App {
         text+=L"\r\nSaída: "+std::to_wstring(extent.width)+L" × "+std::to_wstring(extent.height)+
             L" · "+std::to_wstring(fps)+L" fps (alvo)";
         Status(text);
-        PublishWebState();
         SetWindowTextW(output,hdr ? L"HDR Bridge - Saida HDR local" : gdiOutput ? L"HDR Bridge - Saida SDR - Compatibilidade" : L"HDR Bridge - Saida SDR");
+    }
+    void RefreshCaptureControls() const {
+        if (!captureState) return;
+        SetWindowTextW(GetDlgItem(controls,kPick),running ? L"Trocar origem" : L"Iniciar captura");
+        EnableWindow(GetDlgItem(controls,kStop),running);
+        SetWindowTextW(captureState,running ? L"Capturando" : L"Parada");
+        InvalidateRect(captureState,nullptr,TRUE);
+        ShowWindow(previewEmpty,running ? SW_HIDE : SW_SHOWNA);
+        ShowWindow(preview,running ? SW_SHOWNA : SW_HIDE);
     }
     void Tick() {
         if (!running) return;
@@ -597,66 +589,164 @@ struct App {
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
             parent ? parent : controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
         if (!child) throw_last_error();
-        SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+        if (parent && parent==outputToolbar)
+            SendMessageW(child,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
+        else
+            SetControlFont(child,GetDpiForWindow(parent ? parent : controls));
         return child;
+    }
+    void SetControlFont(HWND child,UINT dpi) {
+        int id=GetDlgCtrlID(child);
+        int pixels=id==kTitle ? 25 : (id==kCaptureHeading || id==kPreviewHeading) ? 17 : 13;
+        bool heading=id==kTitle || id==kCaptureHeading || id==kPreviewHeading ||
+            id==kPick || id==kShow || id==kCaptureState;
+        SendMessageW(child,WM_SETFONT,reinterpret_cast<WPARAM>(theme.Font(dpi,pixels,heading)),FALSE);
+        wchar_t klass[32]{};
+        if (GetClassNameW(child,klass,_countof(klass)) && wcscmp(klass,WC_COMBOBOXW)==0) {
+            auto height=MulDiv(25,static_cast<int>(dpi),96);
+            SendMessageW(child,CB_SETITEMHEIGHT,static_cast<WPARAM>(-1),height);
+            SendMessageW(child,CB_SETITEMHEIGHT,0,height);
+        }
+    }
+    static RECT MainWindowSize(HWND window,int width=kMainWidth) {
+        auto dpi=GetDpiForWindow(window);
+        RECT size{0,0,MulDiv(width,static_cast<int>(dpi),96),MulDiv(kMainHeight,static_cast<int>(dpi),96)};
+        AdjustWindowRectExForDpi(&size,static_cast<DWORD>(GetWindowLongPtrW(window,GWL_STYLE)),
+            FALSE,static_cast<DWORD>(GetWindowLongPtrW(window,GWL_EXSTYLE)),dpi);
+        return size;
+    }
+    void LayoutMain() {
+        if (!preview) return;
+        RECT client{};
+        GetClientRect(controls,&client);
+        int dpi=static_cast<int>(GetDpiForWindow(controls));
+        auto px=[dpi](int value) { return MulDiv(value,dpi,96); };
+        int width=std::max(780,MulDiv(client.right,96,dpi));
+        int height=std::max(kMainHeight,MulDiv(client.bottom,96,dpi));
+        int split=std::clamp((width-60)*46/100,360,520);
+        int left=40, right=split+55, leftWidth=split-36, rightWidth=width-right-40;
+        capturePanel={px(22),px(70),px(split+22),px(height-22)};
+        previewPanel={px(split+38),px(70),px(width-22),px(height-22)};
+        auto place=[&](int id,int x,int y,int w,int h) {
+            auto child=GetDlgItem(controls,id);
+            if (child) SetWindowPos(child,nullptr,px(x),px(y),px(w),px(h),SWP_NOZORDER|SWP_NOACTIVATE);
+        };
+        place(kTitle,22,18,280,35);
+        place(kThemeLabel,width-322,23,40,30);
+        place(kTheme,width-278,24,100,110);
+        place(kResetClose,width-166,20,144,32);
+        place(kCaptureHeading,left,84,leftWidth,31);
+        place(kKindLabel,left,128,leftWidth,20);
+        place(kSourceKind,left,152,leftWidth-105,130);
+        place(kRefresh,left+leftWidth-94,151,94,30);
+        place(kSourceLabel,left,189,leftWidth,20);
+        place(kSource,left,213,leftWidth,240);
+        int half=(leftWidth-12)/2;
+        place(kResolutionLabel,left,250,half,20);
+        place(kRateLabel,left+half+12,250,half,20);
+        place(kResolution,left,274,half,120);
+        place(kRate,left+half+12,274,leftWidth-half-12,120);
+        place(kModeLabel,left,311,leftWidth,20);
+        place(kMode,left,335,leftWidth,130);
+        place(kGdiNotice,left,373,leftWidth,22);
+        int sliderY=gdiOutput ? 401 : 378;
+        place(kExposureLabel,left,sliderY,154,25);
+        place(kExposure,left+158,sliderY-4,leftWidth-158,30);
+        place(kWhiteLabel,left,sliderY+35,154,25);
+        place(kWhite,left+158,sliderY+31,leftWidth-158,30);
+        place(kPick,left,height-79,leftWidth-91,38);
+        place(kStop,left+leftWidth-80,height-79,80,38);
+        place(kPreviewHeading,right,84,rightWidth-100,31);
+        place(kCaptureState,right+rightWidth-100,92,100,22);
+        int videoWidth=std::min(rightWidth,(height-343)*16/9);
+        int videoHeight=videoWidth*9/16;
+        int videoX=right+(rightWidth-videoWidth)/2;
+        SetWindowPos(preview,nullptr,px(videoX),px(125),px(videoWidth),px(videoHeight),SWP_NOZORDER|SWP_NOACTIVATE);
+        place(kPreviewEmpty,videoX,125,videoWidth,videoHeight);
+        place(kVideoStatus,right,137+videoHeight,rightWidth,75);
+        int buttonWidth=(rightWidth-16)/3;
+        place(kShow,right,height-131,buttonWidth,34);
+        place(kLowerOutput,right+buttonWidth+8,height-131,buttonWidth,34);
+        place(kHideOutput,right+(buttonWidth+8)*2,height-131,rightWidth-(buttonWidth+8)*2,34);
+        place(kAudioSummary,right,height-79,rightWidth-174,38);
+        place(kAudio,right+rightWidth-164,height-79,106,38);
+        place(kExit,right+rightWidth-48,height-79,48,38);
+        InvalidateRect(controls,nullptr,FALSE);
+    }
+    void PaintMain() const {
+        PAINTSTRUCT paint{};
+        HDC dc=BeginPaint(controls,&paint);
+        RECT client{};
+        GetClientRect(controls,&client);
+        FillRect(dc,&client,bridge::NativeTheme::Brush(dc,theme.Surface(false)));
+        int radius=MulDiv(16,static_cast<int>(GetDpiForWindow(controls)),96);
+        theme.Card(dc,capturePanel,radius);
+        theme.Card(dc,previewPanel,radius);
+        EndPaint(controls,&paint);
     }
     void InitUI() {
         closeChoice=static_cast<CloseChoice>(ReadSetting(L"CloseChoice",static_cast<DWORD>(CloseChoice::Exit)));
         theme.choice=static_cast<bridge::Theme>(ReadSetting(L"Theme",static_cast<DWORD>(bridge::Theme::Light)));
-        Child(L"STATIC",L"HDR Bridge  /  configurar captura",0,20,18,275,24);
-        Child(L"STATIC",L"Tema",0,313,19,44,22);
-        themeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,360,16,130,110,kTheme);
+        Child(L"STATIC",L"HDR Bridge",SS_CENTERIMAGE,0,0,1,30,kTitle);
+        Child(L"STATIC",L"Tema",SS_CENTERIMAGE,0,0,1,30,kThemeLabel);
+        themeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kTheme);
         SendMessageW(themeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Escuro"));
         SendMessageW(themeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Claro"));
         SendMessageW(themeBox,CB_SETCURSEL,static_cast<WPARAM>(theme.choice),0);
         theme.Refresh(controls);
-        Child(L"BUTTON",L"Perguntar ao fechar",WS_TABSTOP,510,16,180,27,kResetClose);
-        Child(L"STATIC",L"Transmitir",0,20,58,130,22);
-        sourceKindBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,52,270,120,kSourceKind);
+        Child(L"BUTTON",L"Perguntar ao fechar",WS_TABSTOP,0,0,1,30,kResetClose);
+        Child(L"STATIC",L"Captura",SS_CENTERIMAGE,0,0,1,30,kCaptureHeading);
+        Child(L"STATIC",L"Capturar",0,0,0,1,30,kKindLabel);
+        sourceKindBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kSourceKind);
         SendMessageW(sourceKindBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Monitor"));
         SendMessageW(sourceKindBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Aplicativo (janela)"));
         SendMessageW(sourceKindBox,CB_SETCURSEL,1,0);
-        Child(L"BUTTON",L"Atualizar lista",WS_TABSTOP,450,52,240,28,kRefresh);
-        Child(L"STATIC",L"Origem",0,20,104,120,22);
-        sourceBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL,160,98,530,300,kSource);
-        SendMessageW(sourceBox,CB_SETDROPPEDWIDTH,700,0);
-        Child(L"STATIC",L"Resolução de saída",0,20,150,135,22);
-        resolutionBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,144,270,120,kResolution);
+        Child(L"BUTTON",L"Atualizar",WS_TABSTOP,0,0,1,30,kRefresh);
+        Child(L"STATIC",L"Origem",0,0,0,1,30,kSourceLabel);
+        sourceBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL,0,0,1,30,kSource);
+        Child(L"STATIC",L"Resolução",0,0,0,1,30,kResolutionLabel);
+        resolutionBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kResolution);
         SendMessageW(resolutionBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"720p — 1280 × 720"));
         SendMessageW(resolutionBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"1080p — 1920 × 1080"));
         SendMessageW(resolutionBox,CB_SETCURSEL,0,0);
-        rateBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,450,144,240,120,kRate);
+        Child(L"STATIC",L"Quadros por segundo",0,0,0,1,30,kRateLabel);
+        rateBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kRate);
         SendMessageW(rateBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"30 fps"));
         SendMessageW(rateBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"60 fps"));
         SendMessageW(rateBox,CB_SETCURSEL,0,0);
-        Child(L"STATIC",L"Cor da saída",0,20,196,130,22);
-        modeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,190,530,130,kMode);
-        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — tone mapping para compartilhar"));
-        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"HDR — preservar scRGB (saída local)"));
-        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR — compatibilidade GDI (maior uso de CPU)"));
+        Child(L"STATIC",L"Cor da saída",0,0,0,1,30,kModeLabel);
+        modeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,0,0,1,30,kMode);
+        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR · Tone mapping"));
+        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"HDR · scRGB local"));
+        SendMessageW(modeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"SDR · Compatibilidade GDI"));
         SendMessageW(modeBox,CB_SETCURSEL,0,0);
-        exposureLabel=Child(L"STATIC",L"Exposição: 0.0 EV",0,20,244,190,22);
-        exposureSlider=Child(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,225,236,465,34,kExposure);
+        gdiNotice=Child(L"STATIC",L"GDI usa mais CPU e pode reduzir a fluidez.",SS_CENTERIMAGE,0,0,1,30,kGdiNotice);
+        ShowWindow(gdiNotice,SW_HIDE);
+        exposureLabel=Child(L"STATIC",L"Exposição: 0.0 EV",SS_CENTERIMAGE,0,0,1,30,kExposureLabel);
+        exposureSlider=Child(TRACKBAR_CLASSW,L"",TBS_NOTICKS|WS_TABSTOP,0,0,1,30,kExposure);
         SendMessageW(exposureSlider,TBM_SETRANGE,TRUE,MAKELPARAM(-20,20));
         SendMessageW(exposureSlider,TBM_SETPOS,TRUE,0);
-        whiteLabel=Child(L"STATIC",L"Branco ref.: 203 nits",0,20,290,195,22);
-        whiteSlider=Child(TRACKBAR_CLASSW,L"",TBS_AUTOTICKS|WS_TABSTOP,225,282,465,34,kWhite);
+        whiteLabel=Child(L"STATIC",L"Branco ref.: 203 nits",SS_CENTERIMAGE,0,0,1,30,kWhiteLabel);
+        whiteSlider=Child(TRACKBAR_CLASSW,L"",TBS_NOTICKS|WS_TABSTOP,0,0,1,30,kWhite);
         SendMessageW(whiteSlider,TBM_SETRANGE,TRUE,MAKELPARAM(80,400));
         SendMessageW(whiteSlider,TBM_SETPOS,TRUE,203);
-        Child(L"BUTTON",L"Iniciar / trocar origem",WS_TABSTOP,20,332,230,32,kPick);
-        Child(L"BUTTON",L"Parar",WS_TABSTOP,270,332,120,32,kStop);
-        Child(L"BUTTON",L"Áudio...",WS_TABSTOP,450,332,240,32,kAudio);
-        Child(L"STATIC",L"Prévia · resolução de processamento independente",0,20,374,330,22);
-        preview=CreateWindowExW(0,L"HdrBridgePreview",L"",WS_CHILD|WS_VISIBLE|WS_CLIPSIBLINGS,
-            20,400,320,180,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
+        Child(L"BUTTON",L"Iniciar captura",WS_TABSTOP,0,0,1,30,kPick);
+        Child(L"BUTTON",L"Parar",WS_TABSTOP,0,0,1,30,kStop);
+        Child(L"STATIC",L"Prévia",SS_CENTERIMAGE,0,0,1,30,kPreviewHeading);
+        captureState=Child(L"STATIC",L"Parada",SS_RIGHT|SS_CENTERIMAGE,0,0,1,30,kCaptureState);
+        previewEmpty=Child(L"STATIC",L"Aguardando captura",SS_CENTER|SS_CENTERIMAGE,0,0,1,30,kPreviewEmpty);
+        preview=CreateWindowExW(0,L"HdrBridgePreview",L"",WS_CHILD|WS_CLIPSIBLINGS,
+            0,0,1,1,controls,reinterpret_cast<HMENU>(static_cast<INT_PTR>(-1)),GetModuleHandleW(nullptr),nullptr);
         if (!preview) throw_last_error();
-        status=Child(L"STATIC",L"Parado. Selecione a origem e clique em Iniciar.",0,360,378,330,100);
-        Child(L"STATIC",L"Passe o mouse no canto superior direito da saída.\r\nUse Recolher para pôr o vídeo atrás das janelas.\r\nTela branca em outro app? Teste SDR GDI.",0,360,488,330,70);
-        audioSummary=Child(L"STATIC",L"Áudio desligado",0,360,564,330,24);
-        Child(L"BUTTON",L"Abrir saída para Discord",WS_TABSTOP,20,600,240,32,kShow);
-        Child(L"BUTTON",L"Recolher saída",WS_TABSTOP,270,600,130,32,kLowerOutput);
-        Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,410,600,130,32,kHideOutput);
-        Child(L"BUTTON",L"Sair",WS_TABSTOP,570,600,120,32,kExit);
+        status=Child(L"STATIC",L"Escolha a origem para começar.",0,0,0,1,30,kVideoStatus);
+        Child(L"BUTTON",L"Abrir saída",WS_TABSTOP,0,0,1,30,kShow);
+        Child(L"BUTTON",L"Recolher",WS_TABSTOP,0,0,1,30,kLowerOutput);
+        Child(L"BUTTON",L"Fechar saída",WS_TABSTOP,0,0,1,30,kHideOutput);
+        audioSummary=Child(L"STATIC",L"Áudio desligado",0,0,0,1,30,kAudioSummary);
+        Child(L"BUTTON",L"Áudio…",WS_TABSTOP,0,0,1,30,kAudio);
+        Child(L"BUTTON",L"Sair",WS_TABSTOP,0,0,1,30,kExit);
+        RefreshCaptureControls();
+        LayoutMain();
         EnableWindow(GetDlgItem(controls,kShow),FALSE);
         EnableWindow(GetDlgItem(controls,kHideOutput),FALSE);
         EnableWindow(GetDlgItem(controls,kLowerOutput),FALSE);
@@ -679,152 +769,14 @@ struct App {
         wcscpy_s(icon.szTip,L"HDR Bridge — clique para abrir controles");
         Shell_NotifyIconW(NIM_ADD, &icon);
     }
-    void SendText(std::wstring_view type,std::wstring_view value) {
-        web.Send(L"{\"type\":"+bridge::JsonString(type)+L",\"text\":"+bridge::JsonString(value)+L"}");
-    }
-    void PublishWebState() {
-        if (!webActive) return;
-        std::wstring message=L"{\"type\":\"state\",\"sources\":[";
-        for (size_t i=0;i<sources.size();++i) {
-            if (i) message+=L',';
-            message+=bridge::JsonString(sources[i].label);
-        }
-        message+=L']';
-        auto selection=[&](std::wstring_view name,HWND control,UINT read=CB_GETCURSEL) {
-            message+=L",\""+std::wstring(name)+L"\":"+std::to_wstring(SendMessageW(control,read,0,0));
-        };
-        selection(L"source-kind",sourceKindBox);
-        selection(L"source",sourceBox);
-        selection(L"resolution",resolutionBox);
-        selection(L"rate",rateBox);
-        selection(L"mode",modeBox);
-        selection(L"exposure",exposureSlider,TBM_GETPOS);
-        selection(L"white",whiteSlider,TBM_GETPOS);
-        message+=L",\"theme\":"+std::to_wstring(static_cast<DWORD>(theme.choice));
-        message+=running ? L",\"running\":true" : L",\"running\":false";
-        message+=IsWindowVisible(output) ? L",\"output\":true}" : L",\"output\":false}";
-        web.Send(message);
-    }
-    void PublishAudioSettings() {
-        std::wstring message=L"{\"type\":\"audio-settings\",\"destinations\":[\"Não selecionado\"";
-        int selected=0;
-        for (size_t i=0;i<audioDestinations.size();++i) {
-            message+=L','+bridge::JsonString(audioDestinations[i].name);
-            if (audioDestinations[i].id==audioDestination) selected=static_cast<int>(i)+1;
-        }
-        message+=L"],\"destination\":"+std::to_wstring(selected)+L",\"mode\":"+std::to_wstring(static_cast<int>(audioSource))+
-            L",\"gain\":"+std::to_wstring(SendMessageW(audioGainSlider,TBM_GETPOS,0,0))+L'}';
-        web.Send(message);
-    }
-    void StartWebUi() {
-        if (webHost) return;
-        webHost=CreateWindowExW(0,L"STATIC",L"",WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
-            0,0,1,1,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
-        if (!webHost) return;
-        SetTimer(controls,kWebStartupTimer,15000,nullptr);
-        UpdateUiMenu();
-        ResizeWebUi();
-        web.Start(webHost,controls,kWebCommand);
-    }
-    void ResizeWebUi() {
-        if (!webHost) return;
-        RECT area{};
-        GetClientRect(controls,&area);
-        if (area.right>0 && area.bottom>0) {
-            SetWindowPos(webHost,nullptr,0,0,area.right,area.bottom,SWP_NOZORDER|SWP_NOACTIVATE);
-            web.Resize();
-        }
-    }
-    void PresentWebUi() {
-        if (!webHost || webPresenting || webActive) return;
-        ResizeWebUi();
-        UpdateThemeBackground();
-        webPresenting=true;
-        if (!SetWindowPos(webHost,HWND_BOTTOM,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW) ||
-            !web.Present()) UseNativeUi();
-    }
-    void ActivateWebUi() {
-        if (!webPresenting) return;
-        webPresenting=false;
-        KillTimer(controls,kWebStartupTimer);
-        webActive=true;
-        auto style=GetWindowLongPtrW(controls,GWL_STYLE);
-        SetWindowLongPtrW(controls,GWL_STYLE,style|WS_THICKFRAME|WS_MAXIMIZEBOX);
-        auto dpi=GetDpiForWindow(controls);
-        MONITORINFO monitor{}; monitor.cbSize=sizeof(monitor);
-        auto width=MulDiv(930,static_cast<int>(dpi),96),height=MulDiv(615,static_cast<int>(dpi),96);
-        if (GetMonitorInfoW(MonitorFromWindow(controls,MONITOR_DEFAULTTONEAREST),&monitor)) {
-            width=std::min(width,static_cast<int>(monitor.rcWork.right-monitor.rcWork.left));
-            height=std::min(height,static_cast<int>(monitor.rcWork.bottom-monitor.rcWork.top));
-        }
-        SetWindowPos(controls,nullptr,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
-        ResizeWebUi();
-        SetWindowPos(webHost,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
-        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
-            if (child!=webHost) ShowWindow(child,SW_HIDE);
-        }
-        PublishWebState();
-        SendText(L"status",videoStatusText);
-        SendText(L"audio-status",audioStatusText.empty() ? L"Áudio desligado" : audioStatusText);
-    }
-    void UpdateThemeBackground() const {
-        web.SetBackground(theme.choice==bridge::Theme::Dark ?
-            COREWEBVIEW2_COLOR{255,30,32,37} : COREWEBVIEW2_COLOR{255,240,241,244});
-    }
     void ChangeTheme(bridge::Theme choice) {
         if (choice==theme.choice) return;
         theme.choice=choice;
         SendMessageW(themeBox,CB_SETCURSEL,static_cast<WPARAM>(choice),0);
         theme.Refresh(controls);
         theme.Refresh(audioWindow);
-        UpdateThemeBackground();
-        PublishWebState();
         if (!SaveSetting(L"Theme",static_cast<DWORD>(choice)))
             MessageBoxW(controls,L"Não foi possível salvar o tema para a próxima abertura.",L"HDR Bridge",MB_ICONWARNING);
-    }
-    void UpdateUiMenu() const {
-        auto menu=GetSystemMenu(controls,FALSE);
-        RemoveMenu(menu,kSwitchUi,MF_BYCOMMAND);
-        InsertMenuW(menu,SC_CLOSE,MF_BYCOMMAND|MF_STRING,kSwitchUi,
-            webHost ? L"Usar interface nativa" : L"Usar interface moderna");
-    }
-    void ToggleUi() {
-        if (webHost) {
-            SaveSetting(L"NativeUi",1);
-            UseNativeUi();
-        } else {
-            SaveSetting(L"NativeUi",0);
-            StartWebUi();
-        }
-    }
-    void UseNativeUi() {
-        KillTimer(controls,kWebStartupTimer);
-        webPresenting=false;
-        web.Close();
-        if (webHost) DestroyWindow(webHost);
-        webHost=nullptr;
-        UpdateUiMenu();
-        if (!webActive) return;
-        webActive=false;
-        confirmingClose=false;
-        SetWindowPos(preview,nullptr,20,400,320,180,SWP_NOZORDER|SWP_NOACTIVATE);
-        for (HWND child=GetWindow(controls,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT)) {
-            ShowWindow(child,SW_SHOWNA);
-        }
-        if (IsZoomed(controls)) ShowWindow(controls,SW_RESTORE);
-        auto style=GetWindowLongPtrW(controls,GWL_STYLE);
-        SetWindowLongPtrW(controls,GWL_STYLE,style & ~(WS_THICKFRAME|WS_MAXIMIZEBOX));
-        SetWindowPos(controls,nullptr,0,0,740,690,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
-    }
-    void ApplyPreviewLayout(std::span<int const,4> values) {
-        auto x=values[0],y=values[1],width=values[2],height=values[3];
-        RECT area{}; GetClientRect(controls,&area);
-        if (x<0 || y<0 || width<=0 || height<=0 || x>area.right || y>area.bottom ||
-            width>area.right-x || height>area.bottom-y) {
-            ShowWindow(preview,SW_HIDE);
-            return;
-        }
-        SetWindowPos(preview,HWND_TOP,x,y,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW);
     }
     void ResetCloseChoice() {
         if (!SaveSetting(L"CloseChoice",static_cast<DWORD>(CloseChoice::Ask))) {
@@ -848,11 +800,6 @@ struct App {
         if (confirmingClose) return;
         if (closeChoice!=CloseChoice::Ask) { FinishClose(closeChoice,false); return; }
         confirmingClose=true;
-        if (webActive) {
-            ShowWindow(preview,SW_HIDE);
-            web.Send(L"{\"type\":\"confirm-close\"}");
-            return;
-        }
         TASKDIALOG_BUTTON buttons[]={{kShow,L"Minimizar"},{kExit,L"Sair"}};
         TASKDIALOGCONFIG dialog{};
         dialog.cbSize=sizeof(dialog); dialog.hwndParent=controls;
@@ -865,82 +812,11 @@ struct App {
         dialog.cButtons=2; dialog.pButtons=buttons; dialog.nDefaultButton=IDCANCEL;
         int button=IDCANCEL; BOOL remember=FALSE;
         // The native dialog runs a modal message loop. Keep sharing frames
-        // while it waits for a choice, even without the WebView interface.
+        // while it waits for a choice.
         if (running) SetTimer(controls,kCloseDialogTimer,std::max(1u,1000u/fps),nullptr);
         TaskDialogIndirect(&dialog,&button,nullptr,&remember);
         KillTimer(controls,kCloseDialogTimer);
         FinishClose(button==kShow ? CloseChoice::Minimize : button==kExit ? CloseChoice::Exit : CloseChoice::Ask,remember!=FALSE);
-    }
-    void WebCommand(std::wstring_view message) {
-        if (message==L"ready") { PresentWebUi(); return; }
-        if (message==L"presented") { ActivateWebUi(); return; }
-        if (!webActive) return;
-        auto text=to_string(message);
-        std::string_view command=text;
-        auto delimiter=command.find(':');
-        auto action=command.substr(0,delimiter);
-        auto arguments=delimiter==std::string_view::npos ? std::string_view{} : command.substr(delimiter+1);
-        if (action=="layout") {
-            int values[4]{};
-            if (ParseValues(arguments,values)) ApplyPreviewLayout(values);
-            return;
-        }
-        if (action=="theme") {
-            if (arguments=="0") ChangeTheme(bridge::Theme::Dark);
-            else if (arguments=="1") ChangeTheme(bridge::Theme::Light);
-            return;
-        }
-        if (action=="close-cancel") { confirmingClose=false; return; }
-        if (action=="close-minimize" || action=="close-exit") {
-            int value=0;
-            if (confirmingClose && ParseValues(arguments,{&value,1}) && (value==0 || value==1))
-                FinishClose(action=="close-minimize" ? CloseChoice::Minimize : CloseChoice::Exit,value==1);
-            return;
-        }
-        if (action=="audio-open" || action=="audio-refresh") {
-            OpenAudio(false);
-            if (action=="audio-refresh") RefreshAudioDestinations();
-            PublishAudioSettings();
-            return;
-        }
-        if (action=="audio-apply") {
-            int values[3]{};
-            if (audioWindow && ParseValues(arguments,values) && values[0]>=0 && values[0]<=2 &&
-                values[1]>=0 && static_cast<size_t>(values[1])<=audioDestinations.size() && values[2]>=0 && values[2]<=200) {
-                SendMessageW(audioModeBox,CB_SETCURSEL,values[0],0);
-                SendMessageW(audioDestinationBox,CB_SETCURSEL,values[1],0);
-                SendMessageW(audioGainSlider,TBM_SETPOS,TRUE,values[2]);
-                ApplyAudio();
-            }
-            return;
-        }
-        if (arguments.empty()) {
-            if (action=="start") Command(kPick,0);
-            else if (action=="stop") Command(kStop,0);
-            else if (action=="show") Command(kShow,0);
-            else if (action=="lower") Command(kLowerOutput,0);
-            else if (action=="hide") Command(kHideOutput,0);
-            else if (action=="refresh") Command(kRefresh,0);
-            else if (action=="reset-close") Command(kResetClose,0);
-            else if (action=="exit") Command(kExit,0);
-            return;
-        }
-        int value=0;
-        if (!ParseValues(arguments,{&value,1})) return;
-        if (action=="exposure" && value>=-20 && value<=20) {
-            SendMessageW(exposureSlider,TBM_SETPOS,TRUE,value); Sliders(); return;
-        }
-        if (action=="white" && value>=80 && value<=400) {
-            SendMessageW(whiteSlider,TBM_SETPOS,TRUE,value); Sliders(); return;
-        }
-        auto select=[&](HWND control,int id,int maxValue) {
-            if (value>=0 && value<=maxValue) { SendMessageW(control,CB_SETCURSEL,value,0); Command(id,CBN_SELCHANGE); }
-        };
-        if (action=="source-kind") select(sourceKindBox,kSourceKind,1);
-        else if (action=="source") select(sourceBox,kSource,static_cast<int>(sources.size())-1);
-        else if (action=="resolution") select(resolutionBox,kResolution,1);
-        else if (action=="rate") select(rateBox,kRate,1);
-        else if (action=="mode") select(modeBox,kMode,2);
     }
     void Command(int id, int event) {
         if (id == kResetClose) ResetCloseChoice();
@@ -968,12 +844,14 @@ struct App {
         }
         if (id == kHideOutput) CloseOutput();
         if ((id == kLowerOutput || id == kLowerToolbar) && running) LowerOutput();
-        if (id == kExit) { Stop(); web.Close(); DestroyWindow(controls); return; }
+        if (id == kExit) { Stop(); DestroyWindow(controls); return; }
         if (id == kMode && event == CBN_SELCHANGE) {
             auto selected=SendMessageW(modeBox,CB_GETCURSEL,0,0);
             hdr=selected==1; gdiOutput=selected==2;
             if (session) session.IsCursorCaptureEnabled(!gdiOutput);
             EnableWindow(exposureSlider,!hdr); EnableWindow(whiteSlider,!hdr);
+            ShowWindow(gdiNotice,gdiOutput ? SW_SHOWNA : SW_HIDE);
+            LayoutMain();
             ReleaseSwap(); UpdateStatus();
         }
         if (id == kRate && event == CBN_SELCHANGE) {
@@ -1031,24 +909,54 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             case WM_SETTINGCHANGE:
             case WM_SYSCOLORCHANGE: app.theme.Refresh(hwnd); break;
             case WM_ERASEBKGND:
-                if (app.theme.Dark()) { app.theme.Erase(hwnd,reinterpret_cast<HDC>(wparam)); return TRUE; }
-                break;
-            case WM_CTLCOLORSTATIC:
+                if (hwnd!=app.controls) app.theme.Erase(hwnd,reinterpret_cast<HDC>(wparam));
+                return TRUE;
             case WM_CTLCOLORLISTBOX:
-                if (app.theme.Dark()) return app.theme.ControlColor(reinterpret_cast<HDC>(wparam),message==WM_CTLCOLORLISTBOX);
-                break;
+                return app.theme.ControlColor(reinterpret_cast<HDC>(wparam),bridge::SurfaceRole::List);
+            case WM_CTLCOLORSTATIC: {
+                using bridge::SurfaceRole;
+                auto id=GetDlgCtrlID(reinterpret_cast<HWND>(lparam));
+                auto role=SurfaceRole::Panel;
+                if (hwnd==app.audioWindow || id==kTitle || id==kThemeLabel) role=SurfaceRole::Page;
+                else if (id==kPreviewEmpty) role=SurfaceRole::Preview;
+                else if (id==kGdiNotice) role=SurfaceRole::Notice;
+                else if (id==kCaptureState && app.running) role=SurfaceRole::Active;
+                else if (id==kCaptureState || id==kVideoStatus || id==kAudioSummary) role=SurfaceRole::Muted;
+                return app.theme.ControlColor(reinterpret_cast<HDC>(wparam),role);
+            }
             case WM_MEASUREITEM: {
                 auto& item=*reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
                 if (item.CtlType!=ODT_COMBOBOX) break;
                 item.itemHeight=static_cast<UINT>(MulDiv(23,static_cast<int>(GetDpiForWindow(hwnd)),96));
                 return TRUE;
             }
-            case WM_DRAWITEM:
-                app.theme.Draw(*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam)); return TRUE;
+            case WM_DRAWITEM: {
+                auto& item=*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam);
+                auto id=item.CtlID;
+                app.theme.Draw(item,id==kPick || id==kShow || id==kAudioApply,
+                    hwnd==app.controls && id!=kResetClose);
+                return TRUE;
+            }
             }
         }
         if (hwnd == app.controls) {
             switch (message) {
+            case WM_PAINT: app.PaintMain(); return 0;
+            case WM_GETMINMAXINFO: {
+                auto size=App::MainWindowSize(hwnd,780);
+                auto& info=*reinterpret_cast<MINMAXINFO*>(lparam);
+                info.ptMinTrackSize={size.right-size.left,size.bottom-size.top};
+                return 0;
+            }
+            case WM_DPICHANGED: {
+                for (HWND child=GetWindow(hwnd,GW_CHILD);child;child=GetWindow(child,GW_HWNDNEXT))
+                    app.SetControlFont(child,HIWORD(wparam));
+                auto& rect=*reinterpret_cast<RECT const*>(lparam);
+                SetWindowPos(hwnd,nullptr,rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top,
+                    SWP_NOZORDER|SWP_NOACTIVATE);
+                app.LayoutMain();
+                return 0;
+            }
             case WM_COMMAND: app.Command(LOWORD(wparam),HIWORD(wparam)); return 0;
             case WM_HSCROLL: app.Sliders(); return 0;
             case WM_DISPLAYCHANGE: if (app.sourceBox) app.RefreshSources(); return 0;
@@ -1056,25 +964,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             case WM_CLOSE: app.ConfirmClose(); return 0;
             case WM_TIMER:
                 if (wparam==kCloseDialogTimer) { app.Tick(); return 0; }
-                if (wparam==kWebStartupTimer) { if (!app.webActive) app.UseNativeUi(); return 0; }
                 break;
-            case WM_SYSCOMMAND:
-                if (wparam==kSwitchUi) { app.ToggleUi(); return 0; }
-                break;
-            case WM_SHOWWINDOW:
-                if (app.webActive || app.webPresenting) app.web.SetVisible(wparam!=0);
-                break;
-            case WM_MOVE: app.web.ParentMoved(); break;
             case WM_SIZE:
                 if (wparam==SIZE_MINIMIZED) ShowWindow(hwnd,SW_HIDE);
-                else app.ResizeWebUi();
+                else app.LayoutMain();
                 return 0;
-            case kWebCommand: {
-                std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> command(reinterpret_cast<wchar_t*>(lparam),CoTaskMemFree);
-                if (wparam==1) app.UseNativeUi();
-                else if (command) app.WebCommand(command.get());
-                return 0;
-            }
             case kTray:
                 if (lparam == WM_LBUTTONUP || lparam == WM_RBUTTONUP) {
                     ShowWindow(hwnd,SW_RESTORE); SetForegroundWindow(hwnd);
@@ -1153,8 +1047,8 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         previewClass.hbrBackground=static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
         previewClass.lpszClassName=L"HdrBridgePreview";
         if (!RegisterClassW(&previewClass)) throw_last_error();
-        app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_CLIPCHILDREN,
-            CW_USEDEFAULT,CW_USEDEFAULT,740,690,nullptr,nullptr,instance,nullptr);
+        app.controls=CreateWindowW(klass.lpszClassName,L"HDR Bridge",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,
+            CW_USEDEFAULT,CW_USEDEFAULT,kMainWidth,kMainHeight,nullptr,nullptr,instance,nullptr);
         app.output=CreateWindowExW(WS_EX_APPWINDOW,outputClass.lpszClassName,L"HDR Bridge - Saida SDR",
             WS_POPUP,
             0,0,1280,720,nullptr,nullptr,instance,nullptr);
@@ -1162,9 +1056,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
         if (!app.frameTimer) app.frameTimer=CreateWaitableTimerExW(nullptr,nullptr,0,TIMER_ALL_ACCESS);
         if (!app.frameTimer) throw_last_error();
+        auto size=App::MainWindowSize(app.controls);
+        SetWindowPos(app.controls,nullptr,0,0,size.right-size.left,size.bottom-size.top,
+            SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE);
         app.InitGraphics(); app.InitUI(); app.FitOutputWindow(); ShowWindow(app.controls,SW_SHOW);
-        app.UpdateUiMenu();
-        if (!ReadSetting(L"NativeUi",1)) app.StartWebUi();
         bool quitting=false;
         while (!quitting) {
             DWORD event=MsgWaitForMultipleObjectsEx(1,&app.frameTimer,INFINITE,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
@@ -1177,13 +1072,12 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
                 if (message.message==WM_QUIT) { quitting=true; break; }
                 bool audioMessage=app.audioWindow && IsDialogMessageW(app.audioWindow,&message);
-                if (!audioMessage && (app.webActive || !IsDialogMessageW(app.controls,&message))) {
+                if (!audioMessage && !IsDialogMessageW(app.controls,&message)) {
                     TranslateMessage(&message); DispatchMessageW(&message);
                 }
             }
         }
         app.Stop();
-        app.web.Close();
         CloseHandle(app.frameTimer); app.frameTimer=nullptr;
         if (IsWindow(app.output)) DestroyWindow(app.output);
     } catch (hresult_error const& error) {

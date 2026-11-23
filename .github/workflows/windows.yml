@@ -13,8 +13,10 @@ jobs:
         run: cmake -S . -B build -A x64
       - name: Build
         run: cmake --build build --config Release
-      - name: Run capture and WebView2 tests
+      - name: Run capture tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Verify native controls stay visible after launch
+        run: ./scripts/test-native-ui.ps1
       - name: Stage portable distribution
         run: cmake --install build --config Release --prefix build/portable-package
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -33,10 +35,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.2]')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && endsWith(github.event.head_commit.message, '[publish-v1.0.3]')
     needs: windows
     runs-on: ubuntu-latest
-    concurrency: hdr-bridge-v1.0.2
+    concurrency: hdr-bridge-v1.0.3
     permissions:
       contents: write
     steps:
@@ -48,28 +50,27 @@ jobs:
         with:
           name: HdrBridge-windows-x64-with-audio
           path: with-audio
-      - name: Package and publish v1.0.2
+      - name: Package and publish v1.0.3
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           test -f portable/HdrBridge.exe
-          test -f portable/WebView2-LICENSE.txt
+          test -f portable/LICENSE
           test -f with-audio/VB-CABLE/VBCABLE_Setup_x64.exe
-          (cd portable && zip -qr ../HdrBridge-1.0.2-windows-x64.zip .)
-          (cd with-audio && zip -qr ../HdrBridge-1.0.2-windows-x64-with-audio.zip .)
-          sha256sum HdrBridge-1.0.2-*.zip > SHA256SUMS.txt
-          gh release create v1.0.2 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title 'HDR Bridge 1.0.2' --latest --notes-file - \
-            HdrBridge-1.0.2-windows-x64.zip HdrBridge-1.0.2-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
+          (cd portable && zip -qr ../HdrBridge-1.0.3-windows-x64.zip .)
+          (cd with-audio && zip -qr ../HdrBridge-1.0.3-windows-x64-with-audio.zip .)
+          sha256sum HdrBridge-1.0.3-*.zip > SHA256SUMS.txt
+          gh release create v1.0.3 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title 'HDR Bridge 1.0.3' --latest --notes-file - \
+            HdrBridge-1.0.3-windows-x64.zip HdrBridge-1.0.3-windows-x64-with-audio.zip SHA256SUMS.txt <<'NOTES'
           HDR Bridge para Windows 11 x64.
 
-          - Correção para controles que desapareciam ao abrir. A interface nativa fica disponível se a página não puder ser exibida.
-          - Alt + Espaço abre o menu para escolher a interface nativa ou moderna.
-          - Seletor de tema Escuro ou Claro com preferência salva, também na interface Win32.
+          - Interface nativa redesenhada com painéis de captura e prévia, sem WebView2.
+          - Seletor de tema Escuro ou Claro com preferência salva.
           - O X da janela principal pergunta se você quer minimizar para a bandeja ou sair e permite salvar a escolha.
           - Aviso de desempenho ao selecionar o modo SDR de compatibilidade GDI.
 
-          Use o ZIP portátil para abrir `HdrBridge.exe`. O pacote `with-audio` inclui o instalador opcional do VB-CABLE. O Bridge usa a interface Win32 quando o WebView2 está indisponível.
+          Use o ZIP portátil para abrir `HdrBridge.exe`. O pacote `with-audio` inclui o instalador opcional do VB-CABLE.
 
           O executável do Bridge ainda não tem assinatura Authenticode. Os SHA-256 dos downloads estão em `SHA256SUMS.txt`.
           NOTES

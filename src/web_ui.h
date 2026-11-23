@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <shlobj.h>
+#include <shlwapi.h>
 #include <winrt/base.h>
 #include <wrl.h>
 #include <WebView2.h>
@@ -27,7 +28,7 @@ inline std::wstring JsonString(std::wstring_view value) {
     return quoted+L'"';
 }
 
-// The host accepts only messages posted by its embedded about:blank document.
+// The host accepts only messages posted by its embedded document.
 // Application-level handlers validate command names, arity and value ranges.
 class WebUi {
 public:
@@ -63,12 +64,19 @@ public:
     void Send(std::wstring const& message) const {
         if (web_) web_->PostWebMessageAsJson(message.c_str());
     }
+    void SetBackground(COREWEBVIEW2_COLOR color) const {
+        if (!controller_) return;
+        if (auto background=controller_.try_as<ICoreWebView2Controller2>())
+            background->put_DefaultBackgroundColor(color);
+    }
     void Close() {
         if (controller_) controller_->Close();
         web_=nullptr;
         controller_=nullptr;
     }
 private:
+    static constexpr wchar_t kPageUri[]=L"https://hdr-bridge.invalid/index.html";
+
     void Initialize(ICoreWebView2Controller* controller, HWND owner, UINT commandMessage) {
         using Microsoft::WRL::Callback;
         using winrt::check_hresult;
@@ -83,11 +91,27 @@ private:
         check_hresult(settings->put_IsStatusBarEnabled(FALSE));
         check_hresult(settings->put_IsZoomControlEnabled(FALSE));
         EventRegistrationToken token{};
+        // Serve the exact document from the executable. A fixed URI also gives
+        // navigation and web-message events the same origin to validate.
+        check_hresult(web_->AddWebResourceRequestedFilter(kPageUri,COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT));
+        auto environmentSource=web_.as<ICoreWebView2_2>();
+        winrt::com_ptr<ICoreWebView2Environment> environment;
+        check_hresult(environmentSource->get_Environment(environment.put()));
+        check_hresult(web_->add_WebResourceRequested(
+            Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                [environment](ICoreWebView2*,ICoreWebView2WebResourceRequestedEventArgs* event) -> HRESULT {
+                    winrt::com_ptr<IStream> page;
+                    page.attach(SHCreateMemStream(reinterpret_cast<BYTE const*>(kUiHtml),static_cast<UINT>(sizeof(kUiHtml)-1)));
+                    winrt::com_ptr<ICoreWebView2WebResourceResponse> response;
+                    auto hr=environment->CreateWebResourceResponse(page.get(),page ? 200 : 500,
+                        page ? L"OK" : L"Internal Server Error",L"Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store",response.put());
+                    return SUCCEEDED(hr) ? event->put_Response(response.get()) : hr;
+                }).Get(),&token));
         check_hresult(web_->add_NavigationStarting(
             Callback<ICoreWebView2NavigationStartingEventHandler>(
                 [](ICoreWebView2*,ICoreWebView2NavigationStartingEventArgs* event) -> HRESULT {
                     PWSTR uri=nullptr;
-                    bool allowed=SUCCEEDED(event->get_Uri(&uri)) && uri && std::wstring_view(uri)==L"about:blank";
+                    bool allowed=SUCCEEDED(event->get_Uri(&uri)) && uri && std::wstring_view(uri)==kPageUri;
                     CoTaskMemFree(uri);
                     return event->put_Cancel(!allowed);
                 }).Get(),&token));
@@ -111,7 +135,7 @@ private:
             Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                 [owner,commandMessage](ICoreWebView2*,ICoreWebView2WebMessageReceivedEventArgs* event) -> HRESULT {
                     PWSTR uri=nullptr;
-                    bool allowed=SUCCEEDED(event->get_Source(&uri)) && uri && std::wstring_view(uri)==L"about:blank";
+                    bool allowed=SUCCEEDED(event->get_Source(&uri)) && uri && std::wstring_view(uri)==kPageUri;
                     CoTaskMemFree(uri);
                     PWSTR message=nullptr;
                     if (allowed && SUCCEEDED(event->TryGetWebMessageAsString(&message)) && message) {
@@ -121,8 +145,7 @@ private:
                     return S_OK;
                 }).Get(),&token));
         Resize();
-        auto html=winrt::to_hstring(kUiHtml);
-        check_hresult(web_->NavigateToString(html.c_str()));
+        check_hresult(web_->Navigate(kPageUri));
     }
     HWND host_{};
     winrt::com_ptr<ICoreWebView2Controller> controller_;

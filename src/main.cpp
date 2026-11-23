@@ -28,6 +28,7 @@
 #include "sdr_readback.h"
 #include "shader_source.h"
 #include "web_ui.h"
+#include "native_theme.h"
 
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -42,24 +43,23 @@ constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
               kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
               kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118, kLowerOutput = 119,
-              kLowerToolbar = 120, kResetClose = 121;
+              kLowerToolbar = 120, kResetClose = 121, kTheme = 122;
 
 enum class CloseChoice : DWORD { Ask, Minimize, Exit };
 constexpr wchar_t kSettingsKey[]=L"Software\\HDR Bridge";
 
-CloseChoice ReadCloseChoice() {
+DWORD ReadSetting(wchar_t const* name,DWORD maximum) {
     DWORD value=0,size=sizeof(value);
-    if (RegGetValueW(HKEY_CURRENT_USER,kSettingsKey,L"CloseChoice",RRF_RT_REG_DWORD,nullptr,&value,&size)==ERROR_SUCCESS &&
-        value<=static_cast<DWORD>(CloseChoice::Exit)) return static_cast<CloseChoice>(value);
-    return CloseChoice::Ask;
+    if (RegGetValueW(HKEY_CURRENT_USER,kSettingsKey,name,RRF_RT_REG_DWORD,nullptr,&value,&size)==ERROR_SUCCESS &&
+        value<=maximum) return value;
+    return 0;
 }
 
-bool SaveCloseChoice(CloseChoice choice) {
+bool SaveSetting(wchar_t const* name,DWORD value) {
     HKEY key{};
     if (RegCreateKeyExW(HKEY_CURRENT_USER,kSettingsKey,0,nullptr,0,KEY_SET_VALUE,nullptr,&key,nullptr)!=ERROR_SUCCESS)
         return false;
-    DWORD value=static_cast<DWORD>(choice);
-    auto result=RegSetValueExW(key,L"CloseChoice",0,REG_DWORD,reinterpret_cast<BYTE const*>(&value),sizeof(value));
+    auto result=RegSetValueExW(key,name,0,REG_DWORD,reinterpret_cast<BYTE const*>(&value),sizeof(value));
     RegCloseKey(key);
     return result==ERROR_SUCCESS;
 }
@@ -95,7 +95,8 @@ struct App {
     bool hdr = false, running = false, gdiOutput = false;
     bool outputLowered = false;
     bridge::WebUi web;
-    HWND webHost{};
+    bridge::NativeTheme theme;
+    HWND webHost{},themeBox{};
     bool webActive=false;
     std::wstring videoStatusText=L"Parado. Escolha a janela ou monitor de origem.", audioStatusText;
     CloseChoice closeChoice=CloseChoice::Ask;
@@ -177,7 +178,7 @@ struct App {
     }
     void OpenAudio(bool show=true) {
         if (!audioWindow) {
-            audioWindow=CreateWindowW(L"HdrBridgeWindow",L"HDR Bridge — Áudio",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,
+            audioWindow=CreateWindowW(L"HdrBridgeWindow",L"HDR Bridge — Áudio",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,
                 CW_USEDEFAULT,CW_USEDEFAULT,560,470,controls,nullptr,GetModuleHandleW(nullptr),nullptr);
             if (!audioWindow) throw_last_error();
             SetWindowDisplayAffinity(audioWindow,WDA_EXCLUDEFROMCAPTURE);
@@ -198,6 +199,7 @@ struct App {
             Child(L"BUTTON",L"Atualizar dispositivos",WS_TABSTOP,20,360,230,32,kAudioRefresh,audioWindow);
             Child(L"BUTTON",L"Aplicar áudio",WS_TABSTOP,280,360,240,32,kAudioApply,audioWindow);
             RefreshAudioDestinations();
+            theme.Refresh(audioWindow);
         }
         RefreshAudioStatus();
         if (show) { ShowWindow(audioWindow,SW_SHOW); SetForegroundWindow(audioWindow); }
@@ -587,6 +589,10 @@ struct App {
         }
     }
     HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0, HWND parent = nullptr) {
+        if (!parent || parent!=outputToolbar) {
+            if (wcscmp(klass,WC_BUTTONW)==0) style|=BS_OWNERDRAW;
+            else if (wcscmp(klass,WC_COMBOBOXW)==0) style|=CBS_OWNERDRAWFIXED|CBS_HASSTRINGS;
+        }
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
             parent ? parent : controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
         if (!child) throw_last_error();
@@ -594,8 +600,15 @@ struct App {
         return child;
     }
     void InitUI() {
-        closeChoice=ReadCloseChoice();
-        Child(L"STATIC",L"HDR Bridge  /  configurar captura",0,20,18,690,24);
+        closeChoice=static_cast<CloseChoice>(ReadSetting(L"CloseChoice",static_cast<DWORD>(CloseChoice::Exit)));
+        theme.choice=static_cast<bridge::Theme>(ReadSetting(L"Theme",static_cast<DWORD>(bridge::Theme::Light)));
+        Child(L"STATIC",L"HDR Bridge  /  configurar captura",0,20,18,275,24);
+        Child(L"STATIC",L"Tema",0,313,19,44,22);
+        themeBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,360,16,130,110,kTheme);
+        SendMessageW(themeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Escuro"));
+        SendMessageW(themeBox,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"Claro"));
+        SendMessageW(themeBox,CB_SETCURSEL,static_cast<WPARAM>(theme.choice),0);
+        theme.Refresh(controls);
         Child(L"BUTTON",L"Perguntar ao fechar",WS_TABSTOP,510,16,180,27,kResetClose);
         Child(L"STATIC",L"Transmitir",0,20,58,130,22);
         sourceKindBox=Child(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP,160,52,270,120,kSourceKind);
@@ -686,6 +699,7 @@ struct App {
         selection(L"mode",modeBox);
         selection(L"exposure",exposureSlider,TBM_GETPOS);
         selection(L"white",whiteSlider,TBM_GETPOS);
+        message+=L",\"theme\":"+std::to_wstring(static_cast<DWORD>(theme.choice));
         message+=running ? L",\"running\":true" : L",\"running\":false";
         message+=IsWindowVisible(output) ? L",\"output\":true}" : L",\"output\":false}";
         web.Send(message);
@@ -734,10 +748,26 @@ struct App {
         }
         SetWindowPos(controls,nullptr,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
         ResizeWebUi();
+        UpdateThemeBackground();
         ShowWindow(webHost,SW_SHOWNA);
         PublishWebState();
         SendText(L"status",videoStatusText);
         SendText(L"audio-status",audioStatusText.empty() ? L"Áudio desligado" : audioStatusText);
+    }
+    void UpdateThemeBackground() const {
+        web.SetBackground(theme.choice==bridge::Theme::Dark ?
+            COREWEBVIEW2_COLOR{255,30,32,37} : COREWEBVIEW2_COLOR{255,240,241,244});
+    }
+    void ChangeTheme(bridge::Theme choice) {
+        if (choice==theme.choice) return;
+        theme.choice=choice;
+        SendMessageW(themeBox,CB_SETCURSEL,static_cast<WPARAM>(choice),0);
+        theme.Refresh(controls);
+        theme.Refresh(audioWindow);
+        UpdateThemeBackground();
+        PublishWebState();
+        if (!SaveSetting(L"Theme",static_cast<DWORD>(choice)))
+            MessageBoxW(controls,L"Não foi possível salvar o tema para a próxima abertura.",L"HDR Bridge",MB_ICONWARNING);
     }
     void UseNativeUi() {
         web.Close();
@@ -762,7 +792,7 @@ struct App {
         SetWindowPos(preview,HWND_TOP,x,y,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW);
     }
     void ResetCloseChoice() {
-        if (!SaveCloseChoice(CloseChoice::Ask)) {
+        if (!SaveSetting(L"CloseChoice",static_cast<DWORD>(CloseChoice::Ask))) {
             MessageBoxW(controls,L"Não foi possível salvar a preferência.",L"HDR Bridge",MB_ICONWARNING);
             return;
         }
@@ -773,7 +803,7 @@ struct App {
         confirmingClose=false;
         if (choice==CloseChoice::Ask) return;
         if (remember) {
-            if (SaveCloseChoice(choice)) closeChoice=choice;
+            if (SaveSetting(L"CloseChoice",static_cast<DWORD>(choice))) closeChoice=choice;
             else MessageBoxW(controls,L"Não foi possível salvar a preferência.",L"HDR Bridge",MB_ICONWARNING);
         }
         if (choice==CloseChoice::Minimize) ShowWindow(controls,SW_HIDE);
@@ -817,6 +847,11 @@ struct App {
         if (action=="layout") {
             int values[4]{};
             if (ParseValues(arguments,values)) ApplyPreviewLayout(values);
+            return;
+        }
+        if (action=="theme") {
+            if (arguments=="0") ChangeTheme(bridge::Theme::Dark);
+            else if (arguments=="1") ChangeTheme(bridge::Theme::Light);
             return;
         }
         if (action=="close-cancel") { confirmingClose=false; return; }
@@ -873,6 +908,10 @@ struct App {
     }
     void Command(int id, int event) {
         if (id == kResetClose) ResetCloseChoice();
+        if (id == kTheme && event == CBN_SELCHANGE) {
+            auto choice=SendMessageW(themeBox,CB_GETCURSEL,0,0);
+            if (choice!=CB_ERR) ChangeTheme(static_cast<bridge::Theme>(choice));
+        }
         if (id == kAudio) OpenAudio();
         if (id == kAudioRefresh) RefreshAudioDestinations();
         if (id == kAudioApply) ApplyAudio();
@@ -951,6 +990,27 @@ struct App {
 App app;
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     try {
+        if (hwnd==app.controls || hwnd==app.audioWindow) {
+            switch (message) {
+            case WM_SETTINGCHANGE:
+            case WM_SYSCOLORCHANGE: app.theme.Refresh(hwnd); break;
+            case WM_ERASEBKGND:
+                if (app.theme.Dark()) { app.theme.Erase(hwnd,reinterpret_cast<HDC>(wparam)); return TRUE; }
+                break;
+            case WM_CTLCOLORSTATIC:
+            case WM_CTLCOLORLISTBOX:
+                if (app.theme.Dark()) return app.theme.ControlColor(reinterpret_cast<HDC>(wparam),message==WM_CTLCOLORLISTBOX);
+                break;
+            case WM_MEASUREITEM: {
+                auto& item=*reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
+                if (item.CtlType!=ODT_COMBOBOX) break;
+                item.itemHeight=static_cast<UINT>(MulDiv(23,static_cast<int>(GetDpiForWindow(hwnd)),96));
+                return TRUE;
+            }
+            case WM_DRAWITEM:
+                app.theme.Draw(*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam)); return TRUE;
+            }
+        }
         if (hwnd == app.controls) {
             switch (message) {
             case WM_COMMAND: app.Command(LOWORD(wparam),HIWORD(wparam)); return 0;

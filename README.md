@@ -2,10 +2,12 @@
 
 Aplicativo nativo para Windows 11 que captura uma janela ou monitor em FP16 HDR e
 oferece saída SDR com tone mapping na GPU ou HDR scRGB local, mantendo o HDR do
-monitor ligado. A versão 1.0 tem interface escura com HTML/CSS/JavaScript,
+monitor ligado. A versão 1.0 tem interface com HTML/CSS/JavaScript,
 prévia nativa dentro da janela principal e roteamento de áudio. A interface
 vem embutida no executável e usa o WebView2 do Windows 11. Em máquinas sem
-esse runtime, a interface Win32 abre automaticamente.
+esse runtime, a interface Win32 abre automaticamente. Use **Tema** no topo
+para alternar entre **Escuro** e **Claro**. A preferência vale nas duas
+interfaces e é lembrada quando o app é reaberto.
 
 ## Configuração da captura
 

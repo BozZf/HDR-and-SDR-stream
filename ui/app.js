@@ -5,6 +5,7 @@ const send = (message) => bridge?.postMessage(message);
 const closeDialog = byId('close-dialog');
 const audioDialog = byId('audio-dialog');
 const preview = byId('preview-slot');
+const theme = byId('theme');
 let running = false;
 let lastLayout = '';
 
@@ -42,9 +43,15 @@ function updateSliders() {
   byId('gain-value').value = `${byId('audio-gain').value}%`;
 }
 
+function applyTheme(value) {
+  theme.value = value === '1' ? '1' : '0';
+  document.documentElement.dataset.theme = theme.value === '1' ? 'light' : 'dark';
+}
+
 bridge?.addEventListener('message', ({ data }) => {
   if (data.type === 'state') {
     running = data.running;
+    applyTheme(String(data.theme));
     for (const id of ['source-kind', 'resolution', 'rate', 'mode', 'exposure', 'white']) {
       byId(id).value = String(data[id]);
     }
@@ -76,6 +83,11 @@ bridge?.addEventListener('message', ({ data }) => {
       layoutPreview();
     }
   }
+});
+
+theme.addEventListener('change', () => {
+  applyTheme(theme.value);
+  send(`theme:${theme.value}`);
 });
 
 for (const id of ['source-kind', 'source', 'resolution', 'rate', 'mode']) {

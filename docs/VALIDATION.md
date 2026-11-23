@@ -30,6 +30,8 @@ Windows/Discord, GPU/driver, monitor, modo HDR e origem ao executar.
   fechar e reabrir o app. Restaurar a confirmação em Perguntar ao fechar.
 - Confirmar que o X da janela de saída fecha só a saída, sem mostrar a caixa
   de confirmação do app.
+- Alternar entre Escuro e Claro com a saída aberta. A barra local deve usar
+  o mesmo tema, surgir no canto superior direito e ficar fora da transmissão.
 - Verificar a interface em escalas de 100% e 150%, incluindo prévia, teclado,
   lista de fontes, modal do áudio e aviso GDI. A prévia deve ceder espaço às
   caixas de diálogo. Confirmar que os controles continuam visíveis ao abrir e

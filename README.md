@@ -67,7 +67,7 @@ O Visual C++ Redistributable x64 pode ser necessário em um PC sem Visual Studio
    com tela SDR, use SDR e compartilhe **HDR Bridge - Saida SDR** no Discord.
    Ajuste a qualidade também no próprio serviço.
 6. Passe o mouse no **canto superior direito** da saída para mostrar seus
-   controles locais. Use **Recolher** para colocar a janela atrás das outras
+   controles locais, que acompanham a escolha em **Tema**. Use **Recolher** para colocar a janela atrás das outras
    sem suspender o vídeo. O mesmo comando está na janela principal e em **F9**
    quando a saída está em foco. Clique em **Abrir saída para Discord** para
    trazê-la à frente.

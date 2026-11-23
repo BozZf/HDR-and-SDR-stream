@@ -40,13 +40,14 @@ constexpr int kPick = 100, kStop = 101, kMode = 102, kExposure = 103,
               kSourceKind = 108, kSource = 109, kRefresh = 110, kResolution = 111, kHideOutput = 112,
               kAudio = 113, kAudioMode = 114, kAudioDestination = 115,
               kAudioRefresh = 116, kAudioGain = 117, kAudioApply = 118, kLowerOutput = 119,
-              kLowerToolbar = 120, kResetClose = 121, kTheme = 122;
+              kLowerToolbar = 120, kResetClose = 121, kTheme = 122, kToolbarHeading = 123;
 enum MainControl {
     kTitle=200, kThemeLabel, kCaptureHeading, kKindLabel, kSourceLabel, kResolutionLabel,
     kRateLabel, kModeLabel, kExposureLabel, kWhiteLabel, kPreviewHeading, kPreviewEmpty,
     kVideoStatus, kAudioSummary, kGdiNotice, kCaptureState
 };
 constexpr int kMainWidth=880, kMainHeight=574;
+constexpr int kToolbarWidth=268, kToolbarHeight=46, kToolbarCorner=16;
 
 enum class CloseChoice : DWORD { Ask, Minimize, Exit };
 constexpr wchar_t kSettingsKey[]=L"Software\\HDR Bridge";
@@ -78,6 +79,46 @@ com_ptr<ID3DBlob> Compile(char const* entry, char const* target) {
     return blob;
 }
 
+LRESULT CALLBACK ToolbarButtonProc(HWND hwnd,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR,DWORD_PTR context) {
+    auto& hovered=*reinterpret_cast<bool*>(context);
+    if (message==WM_MOUSEMOVE && !hovered) {
+        TRACKMOUSEEVENT tracking{sizeof(tracking),TME_LEAVE,hwnd,0};
+        if (TrackMouseEvent(&tracking)) {
+            hovered=true;
+            InvalidateRect(hwnd,nullptr,FALSE);
+        }
+    } else if (message==WM_MOUSELEAVE && hovered) {
+        hovered=false;
+        InvalidateRect(hwnd,nullptr,FALSE);
+    }
+    return DefSubclassProc(hwnd,message,wparam,lparam);
+}
+
+LRESULT CALLBACK ComboThemeProc(HWND hwnd,UINT message,WPARAM wparam,LPARAM lparam,UINT_PTR,DWORD_PTR context) {
+    auto const& theme=*reinterpret_cast<bridge::NativeTheme const*>(context);
+    if (message==WM_PAINT && !theme.HighContrast()) {
+        PAINTSTRUCT paint{};
+        auto dc=BeginPaint(hwnd,&paint);
+        theme.DrawCombo(hwnd,dc);
+        EndPaint(hwnd,&paint);
+        return 0;
+    }
+    if (message==WM_PRINTCLIENT && !theme.HighContrast()) {
+        theme.DrawCombo(hwnd,reinterpret_cast<HDC>(wparam));
+        return 0;
+    }
+    if (message==WM_ERASEBKGND && !theme.HighContrast()) return TRUE;
+
+    auto result=DefSubclassProc(hwnd,message,wparam,lparam);
+    switch (message) {
+    case WM_SETFOCUS: case WM_KILLFOCUS: case WM_ENABLE:
+    case CB_SETCURSEL: case CB_RESETCONTENT: case CB_SHOWDROPDOWN:
+        InvalidateRect(hwnd,nullptr,FALSE);
+        break;
+    }
+    return result;
+}
+
 struct App {
     HWND controls{}, output{}, outputToolbar{}, preview{}, modeBox{}, rateBox{}, exposureSlider{}, whiteSlider{},
          exposureLabel{}, whiteLabel{}, status{}, sourceKindBox{}, sourceBox{}, resolutionBox{};
@@ -90,6 +131,8 @@ struct App {
     CloseChoice closeChoice=CloseChoice::Ask;
     bool confirmingClose=false;
     HWND outputToolbarTitle{},outputToolbarLower{},outputToolbarClose{};
+    UINT outputToolbarDpi{};
+    bool toolbarLowerHovered=false,toolbarCloseHovered=false;
     HWND audioWindow{},audioModeBox{},audioDestinationBox{},audioGainSlider{},audioGainLabel{},audioStatus{},audioSummary{};
     bridge::AudioBridge audio;
     bridge::AudioSource audioSource=bridge::AudioSource::Off;
@@ -237,7 +280,31 @@ struct App {
         if (!SetWindowPos(output,nullptr,x,y,width,height,SWP_NOZORDER|SWP_NOACTIVATE)) throw_last_error();
     }
     void HideOutputToolbar() {
-        if (outputToolbar && IsWindowVisible(outputToolbar)) ShowWindow(outputToolbar,SW_HIDE);
+        if (!outputToolbar || !IsWindowVisible(outputToolbar)) return;
+        ShowWindow(outputToolbar,SW_HIDE);
+        toolbarLowerHovered=false;
+        toolbarCloseHovered=false;
+        InvalidateRect(outputToolbarLower,nullptr,FALSE);
+        InvalidateRect(outputToolbarClose,nullptr,FALSE);
+    }
+    void LayoutOutputToolbar(UINT dpi) {
+        auto px=[dpi](int value) { return MulDiv(value,static_cast<int>(dpi),96); };
+        SetControlFont(outputToolbarTitle,dpi);
+        SetControlFont(outputToolbarLower,dpi);
+        SetControlFont(outputToolbarClose,dpi);
+        MoveWindow(outputToolbarTitle,px(14),0,px(71),px(kToolbarHeight),FALSE);
+        MoveWindow(outputToolbarLower,px(87),px(7),px(97),px(32),FALSE);
+        MoveWindow(outputToolbarClose,px(191),px(7),px(70),px(32),FALSE);
+        auto region=CreateRoundRectRgn(0,0,px(kToolbarWidth),px(kToolbarHeight),px(kToolbarCorner),px(kToolbarCorner));
+        if (region && !SetWindowRgn(outputToolbar,region,FALSE)) DeleteObject(region);
+    }
+    void PaintOutputToolbar() const {
+        PAINTSTRUCT paint{};
+        auto dc=BeginPaint(outputToolbar,&paint);
+        RECT client{};
+        GetClientRect(outputToolbar,&client);
+        theme.Card(dc,client,MulDiv(kToolbarCorner,static_cast<int>(outputToolbarDpi),96));
+        EndPaint(outputToolbar,&paint);
     }
     void UpdateOutputToolbar() {
         if (!outputToolbar) return;
@@ -251,9 +318,9 @@ struct App {
             HideOutputToolbar();
             return;
         }
-        auto dpi=static_cast<int>(GetDpiForWindow(output));
-        auto px=[dpi](int value) { return MulDiv(value,dpi,96); };
-        auto width=px(310),height=px(38);
+        auto dpi=GetDpiForWindow(output);
+        auto px=[dpi](int value) { return MulDiv(value,static_cast<int>(dpi),96); };
+        auto width=px(kToolbarWidth),height=px(kToolbarHeight);
         auto x=outputBounds.right-width,y=outputBounds.top;
         RECT hotspot{x,y,outputBounds.right,y+px(12)};
         RECT toolbarBounds{x,y,outputBounds.right,y+height};
@@ -266,10 +333,11 @@ struct App {
         }
         RECT current{};
         if (IsWindowVisible(outputToolbar) && GetWindowRect(outputToolbar,&current) && EqualRect(&current,&toolbarBounds)) return;
+        if (outputToolbarDpi!=dpi) {
+            outputToolbarDpi=dpi;
+            LayoutOutputToolbar(dpi);
+        }
         SetWindowPos(outputToolbar,HWND_TOP,x,y,width,height,SWP_NOACTIVATE|SWP_NOOWNERZORDER|SWP_SHOWWINDOW);
-        MoveWindow(outputToolbarTitle,px(10),px(10),px(120),px(22),TRUE);
-        MoveWindow(outputToolbarLower,px(133),px(5),px(100),px(28),TRUE);
-        MoveWindow(outputToolbarClose,px(238),px(5),px(65),px(28),TRUE);
     }
     static BOOL CALLBACK AddMonitor(HMONITOR monitor,HDC,LPRECT,LPARAM data) {
         auto& self = *reinterpret_cast<App*>(data);
@@ -582,23 +650,20 @@ struct App {
         }
     }
     HWND Child(wchar_t const* klass, wchar_t const* text, DWORD style, int x, int y, int w, int h, int id = 0, HWND parent = nullptr) {
-        if (!parent || parent!=outputToolbar) {
-            if (wcscmp(klass,WC_BUTTONW)==0) style|=BS_OWNERDRAW;
-            else if (wcscmp(klass,WC_COMBOBOXW)==0) style|=CBS_OWNERDRAWFIXED|CBS_HASSTRINGS;
-        }
+        bool combo=wcscmp(klass,WC_COMBOBOXW)==0;
+        if (wcscmp(klass,WC_BUTTONW)==0) style|=BS_OWNERDRAW;
+        else if (combo) style|=CBS_OWNERDRAWFIXED|CBS_HASSTRINGS;
         HWND child = CreateWindowExW(0, klass, text, WS_CHILD|WS_VISIBLE|style, x,y,w,h,
             parent ? parent : controls, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
         if (!child) throw_last_error();
-        if (parent && parent==outputToolbar)
-            SendMessageW(child,WM_SETFONT,reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
-        else
-            SetControlFont(child,GetDpiForWindow(parent ? parent : controls));
+        if (combo) SetWindowSubclass(child,ComboThemeProc,1,reinterpret_cast<DWORD_PTR>(&theme));
+        SetControlFont(child,GetDpiForWindow(parent ? parent : controls));
         return child;
     }
     void SetControlFont(HWND child,UINT dpi) {
         int id=GetDlgCtrlID(child);
         int pixels=id==kTitle ? 25 : (id==kCaptureHeading || id==kPreviewHeading) ? 17 : 13;
-        bool heading=id==kTitle || id==kCaptureHeading || id==kPreviewHeading ||
+        bool heading=id==kTitle || id==kCaptureHeading || id==kPreviewHeading || id==kToolbarHeading ||
             id==kPick || id==kShow || id==kCaptureState;
         SendMessageW(child,WM_SETFONT,reinterpret_cast<WPARAM>(theme.Font(dpi,pixels,heading)),FALSE);
         wchar_t klass[32]{};
@@ -754,11 +819,13 @@ struct App {
         // Keep the controller and local toolbar outside the shared image.
         SetWindowDisplayAffinity(controls, WDA_EXCLUDEFROMCAPTURE);
         outputToolbar=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,L"HdrBridgeWindow",L"",
-            WS_POPUP|WS_CLIPCHILDREN,0,0,310,38,output,nullptr,GetModuleHandleW(nullptr),nullptr);
+            WS_POPUP|WS_CLIPCHILDREN,0,0,1,1,output,nullptr,GetModuleHandleW(nullptr),nullptr);
         if (outputToolbar && SetWindowDisplayAffinity(outputToolbar,WDA_EXCLUDEFROMCAPTURE)) {
-            outputToolbarTitle=Child(L"STATIC",L"HDR Bridge",0,10,10,120,22,0,outputToolbar);
-            outputToolbarLower=Child(L"BUTTON",L"Recolher",0,133,5,100,28,kLowerToolbar,outputToolbar);
-            outputToolbarClose=Child(L"BUTTON",L"Fechar",0,238,5,65,28,kHideOutput,outputToolbar);
+            outputToolbarTitle=Child(L"STATIC",L"Saída",SS_CENTERIMAGE,0,0,1,1,kToolbarHeading,outputToolbar);
+            outputToolbarLower=Child(L"BUTTON",L"Recolher",0,0,0,1,1,kLowerToolbar,outputToolbar);
+            outputToolbarClose=Child(L"BUTTON",L"Fechar",0,0,0,1,1,kHideOutput,outputToolbar);
+            SetWindowSubclass(outputToolbarLower,ToolbarButtonProc,1,reinterpret_cast<DWORD_PTR>(&toolbarLowerHovered));
+            SetWindowSubclass(outputToolbarClose,ToolbarButtonProc,1,reinterpret_cast<DWORD_PTR>(&toolbarCloseHovered));
         } else if (outputToolbar) {
             DestroyWindow(outputToolbar);
             outputToolbar=nullptr;
@@ -775,6 +842,7 @@ struct App {
         SendMessageW(themeBox,CB_SETCURSEL,static_cast<WPARAM>(choice),0);
         theme.Refresh(controls);
         theme.Refresh(audioWindow);
+        theme.Refresh(outputToolbar);
         if (!SaveSetting(L"Theme",static_cast<DWORD>(choice)))
             MessageBoxW(controls,L"Não foi possível salvar o tema para a próxima abertura.",L"HDR Bridge",MB_ICONWARNING);
     }
@@ -819,6 +887,11 @@ struct App {
         FinishClose(button==kShow ? CloseChoice::Minimize : button==kExit ? CloseChoice::Exit : CloseChoice::Ask,remember!=FALSE);
     }
     void Command(int id, int event) {
+        if (event==CBN_SELCHANGE || event==CBN_DROPDOWN || event==CBN_CLOSEUP) {
+            auto combo=GetDlgItem(controls,id);
+            if (!combo && audioWindow) combo=GetDlgItem(audioWindow,id);
+            if (combo) InvalidateRect(combo,nullptr,FALSE);
+        }
         if (id == kResetClose) ResetCloseChoice();
         if (id == kTheme && event == CBN_SELCHANGE) {
             auto choice=SendMessageW(themeBox,CB_GETCURSEL,0,0);
@@ -904,12 +977,12 @@ struct App {
 App app;
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
     try {
-        if (hwnd==app.controls || hwnd==app.audioWindow) {
+        if (hwnd==app.controls || hwnd==app.audioWindow || hwnd==app.outputToolbar) {
             switch (message) {
             case WM_SETTINGCHANGE:
             case WM_SYSCOLORCHANGE: app.theme.Refresh(hwnd); break;
             case WM_ERASEBKGND:
-                if (hwnd!=app.controls) app.theme.Erase(hwnd,reinterpret_cast<HDC>(wparam));
+                if (hwnd==app.audioWindow) app.theme.Erase(hwnd,reinterpret_cast<HDC>(wparam));
                 return TRUE;
             case WM_CTLCOLORLISTBOX:
                 return app.theme.ControlColor(reinterpret_cast<HDC>(wparam),bridge::SurfaceRole::List);
@@ -917,7 +990,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 using bridge::SurfaceRole;
                 auto id=GetDlgCtrlID(reinterpret_cast<HWND>(lparam));
                 auto role=SurfaceRole::Panel;
-                if (hwnd==app.audioWindow || id==kTitle || id==kThemeLabel) role=SurfaceRole::Page;
+                if (hwnd==app.audioWindow || id==kTitle || id==kThemeLabel || id==kTheme) role=SurfaceRole::Page;
                 else if (id==kPreviewEmpty) role=SurfaceRole::Preview;
                 else if (id==kGdiNotice) role=SurfaceRole::Notice;
                 else if (id==kCaptureState && app.running) role=SurfaceRole::Active;
@@ -931,10 +1004,13 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
                 return TRUE;
             }
             case WM_DRAWITEM: {
-                auto& item=*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam);
+                auto item=*reinterpret_cast<DRAWITEMSTRUCT const*>(lparam);
                 auto id=item.CtlID;
+                bool toolbar=hwnd==app.outputToolbar;
+                if (toolbar && (id==kLowerToolbar ? app.toolbarLowerHovered : app.toolbarCloseHovered))
+                    item.itemState|=ODS_HOTLIGHT;
                 app.theme.Draw(item,id==kPick || id==kShow || id==kAudioApply,
-                    hwnd==app.controls && id!=kResetClose);
+                    toolbar || (hwnd==app.controls && id!=kResetClose));
                 return TRUE;
             }
             }
@@ -985,6 +1061,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
             if (message==WM_HSCROLL) { app.AudioGain(); return 0; }
             if (message==WM_CLOSE) { ShowWindow(hwnd,SW_HIDE); return 0; }
         } else if (hwnd == app.outputToolbar) {
+            if (message==WM_PAINT) { app.PaintOutputToolbar(); return 0; }
             if (message==WM_MOUSEACTIVATE) return MA_NOACTIVATE;
             if (message==WM_COMMAND) { app.Command(LOWORD(wparam),HIWORD(wparam)); return 0; }
             if (message==WM_LBUTTONDOWN) {

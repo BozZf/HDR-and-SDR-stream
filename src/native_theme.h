@@ -69,6 +69,12 @@ public:
             Dark() ? RGB(57,61,71) : RGB(215,220,229),radius);
     }
 
+    COLORREF ControlSurface(bool selected,bool primary) const {
+        if (HighContrast()) return GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
+        if (Dark()) return selected ? RGB(76,79,88) : primary ? RGB(67,70,79) : RGB(60,62,70);
+        return selected ? RGB(207,216,232) : primary ? RGB(216,224,239) : RGB(233,236,242);
+    }
+
     LRESULT ControlColor(HDC dc,SurfaceRole role) const {
         bool dark=Dark();
         auto background=Surface(role!=SurfaceRole::Page);
@@ -76,7 +82,7 @@ public:
         if (HighContrast()) text=GetSysColor(COLOR_WINDOWTEXT);
         else {
             switch (role) {
-            case SurfaceRole::List: background=dark ? RGB(49,52,61) : RGB(233,236,242); break;
+            case SurfaceRole::List: background=ControlSurface(false,false); break;
             case SurfaceRole::Preview:
                 background=dark ? RGB(22,24,29) : RGB(226,230,239);
                 text=dark ? RGB(175,182,197) : RGB(76,87,108);
@@ -99,17 +105,61 @@ public:
         FillRect(dc,&client,Brush(dc,Surface(false)));
     }
 
+    static std::wstring ControlText(HWND control,bool button,WPARAM index=0) {
+        auto length=button ? GetWindowTextLengthW(control) : SendMessageW(control,CB_GETLBTEXTLEN,index,0);
+        if (length<=0) return {};
+        std::wstring label(static_cast<size_t>(length)+1,L'\0');
+        if (button) GetWindowTextW(control,label.data(),static_cast<int>(label.size()));
+        else SendMessageW(control,CB_GETLBTEXT,index,reinterpret_cast<LPARAM>(label.data()));
+        return label;
+    }
+
+    static void DrawLabel(HWND control,HDC dc,RECT rect,COLORREF text,std::wstring const& label,UINT align) {
+        auto oldFont=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(control,WM_GETFONT,0,0)));
+        SetBkMode(dc,TRANSPARENT);
+        SetTextColor(dc,text);
+        DrawTextW(dc,label.c_str(),-1,&rect,align|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
+        if (oldFont) SelectObject(dc,oldFont);
+    }
+
+    void DrawCombo(HWND control,HDC dc) const {
+        RECT rect{};
+        GetClientRect(control,&rect);
+        auto parent=GetParent(control);
+        auto brush=reinterpret_cast<HBRUSH>(SendMessageW(parent,WM_CTLCOLORSTATIC,
+            reinterpret_cast<WPARAM>(dc),reinterpret_cast<LPARAM>(control)));
+        FillRect(dc,&rect,brush);
+        bool dark=Dark(), enabled=IsWindowEnabled(control)!=FALSE;
+        bool focused=GetFocus()==control, open=SendMessageW(control,CB_GETDROPPEDSTATE,0,0)!=0;
+        auto text=dark ? RGB(239,240,243) : RGB(33,37,46);
+        if (!enabled) text=dark ? RGB(155,160,172) : RGB(110,118,133);
+        auto border=focused || open ? (dark ? RGB(137,145,164) : RGB(104,121,151))
+            : (dark ? RGB(82,87,101) : RGB(188,197,213));
+        auto dpi=static_cast<int>(GetDpiForWindow(control));
+        auto px=[dpi](int logical) { return MulDiv(logical,dpi,96); };
+        Rounded(dc,rect,ControlSurface(open,false),border,px(12));
+        int x=rect.right-px(14),y=(rect.top+rect.bottom)/2;
+        POINT arrow[]={{x-px(4),y-px(2)},{x,y+px(2)},{x+px(4),y-px(2)}};
+        auto oldPen=SelectObject(dc,GetStockObject(DC_PEN));
+        auto oldColor=SetDCPenColor(dc,text);
+        Polyline(dc,arrow,_countof(arrow));
+        SetDCPenColor(dc,oldColor);
+        SelectObject(dc,oldPen);
+        rect.left+=px(10);
+        rect.right-=px(27);
+        auto index=SendMessageW(control,CB_GETCURSEL,0,0);
+        if (index!=CB_ERR) DrawLabel(control,dc,rect,text,ControlText(control,false,index),DT_LEFT|DT_NOPREFIX);
+    }
+
     void Draw(DRAWITEMSTRUCT const& item,bool primary,bool panel) const {
         auto dark=Dark();
         bool selected=(item.itemState & (ODS_SELECTED|ODS_HOTLIGHT))!=0;
         bool disabled=(item.itemState & (ODS_DISABLED|ODS_GRAYED))!=0;
         bool button=item.CtlType==ODT_BUTTON;
-        auto bg=dark ? (selected ? RGB(76,82,96) : primary && !disabled ? RGB(65,71,84) : RGB(49,52,61))
-            : selected ? RGB(207,216,232) : primary && !disabled ? RGB(216,224,239) : RGB(233,236,242);
+        auto bg=ControlSurface(selected,primary && !disabled);
         auto fg=dark ? (disabled ? RGB(155,160,172) : RGB(239,240,243))
             : disabled ? RGB(110,118,133) : RGB(33,37,46);
         if (HighContrast()) {
-            bg=GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
             fg=GetSysColor(disabled ? COLOR_GRAYTEXT : selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
         }
         auto dc=item.hDC;
@@ -123,20 +173,10 @@ public:
         InflateRect(&focus,-3,-3);
         if ((item.itemState & ODS_FOCUS) && !(item.itemState & ODS_NOFOCUSRECT)) DrawFocusRect(dc,&focus);
 
-        auto length=button ? GetWindowTextLengthW(item.hwndItem) :
-            SendMessageW(item.hwndItem,CB_GETLBTEXTLEN,item.itemID,0);
-        if (length<=0) return;
-        std::wstring label(static_cast<size_t>(length)+1,L'\0');
-        if (button) GetWindowTextW(item.hwndItem,label.data(),static_cast<int>(label.size()));
-        else SendMessageW(item.hwndItem,CB_GETLBTEXT,item.itemID,reinterpret_cast<LPARAM>(label.data()));
-        auto oldFont=SelectObject(dc,reinterpret_cast<HFONT>(SendMessageW(item.hwndItem,WM_GETFONT,0,0)));
-        SetBkMode(dc,TRANSPARENT);
-        SetTextColor(dc,fg);
         InflateRect(&rect,-5,0);
         UINT align=button ? DT_CENTER : DT_LEFT|DT_NOPREFIX;
         if (item.itemState & ODS_NOACCEL) align|=DT_HIDEPREFIX;
-        DrawTextW(dc,label.c_str(),-1,&rect,align|DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS);
-        if (oldFont) SelectObject(dc,oldFont);
+        DrawLabel(item.hwndItem,dc,rect,fg,ControlText(item.hwndItem,button,item.itemID),align);
     }
 private:
     std::map<std::tuple<UINT,int,bool>,HFONT> fonts_;
